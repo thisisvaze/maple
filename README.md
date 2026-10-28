@@ -10,6 +10,26 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Pencil-only canvas on a large sheet: two-finger pan and pinch, autosave a second after the pen pauses
 - [x] Gallery: page cards with cached thumbnails (light and dark), + for a new page, zoom open and close, select and delete
 - [x] Two-finger tap undo, three-finger tap redo, Pencil double-tap swaps pen and eraser
+- [x] Muse Spark 1.3 client (Responses API: text and PNG input, low reasoning effort by default)
+- [ ] Marks: `?`, double dot and empty box wake an agent
+- [ ] Answers: quiet dots that open into bubbles, nudge and hint before the answer
+- [ ] Agent ink: drawings and graphs inside a box
+- [ ] SAM 3.1 for circled regions; multi-agent shared memory
+
+## Meta models
+
+| Model | Used for |
+|---|---|
+| `muse-spark-1.3` | Reading the page and the mark, answering, drawing |
+
+## Check
+
+```sh
+swiftc -swift-version 6 -parse-as-library Maple/Muse.swift checks/spark.swift -o /tmp/spark-check
+MODEL_API_KEY=... /tmp/spark-check   # parses a recorded reply, then one live call that reads "2 + 2 = ?" from a PNG
+```
+
+28 Oct: the live call answered "4" in 1.9 s with 104 output tokens at low effort. At the API's default high effort, "say hi" took 678.
 
 ## Run it
 
