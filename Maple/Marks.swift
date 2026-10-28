@@ -90,19 +90,20 @@ final class Marks {
 
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String?, threads: [Agent.Thread], target: String?,
              trigger: [String], anchor: CGPoint, zoom: CGFloat, bubble: Bubble?) async {
+        // The person may have erased the mark: before a retry, or while Muse was reading it.
+        func present() -> Bool { Set(canvas.drawing.strokes.map(Self.id)).isSuperset(of: trigger) }
+        func drop() {
+            bubble?.removeFromSuperview()
+            bubbles.removeAll { $0 === bubble }
+        }
+        guard present() else { return drop() }
         asking += 1
         defer { asking -= 1 }
         let start = ContinuousClock.now
         do {
             let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target)
             log.notice("mark=\(answer.mark, privacy: .public) gesture=\(gesture ?? "-", privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
-            // The person may have erased the mark while Muse was reading it.
-            let present = Set(canvas.drawing.strokes.map(Self.id))
-            guard trigger.allSatisfy(present.contains), gesture != nil || answer.mark == "question", !answer.reply.isEmpty else {
-                bubble?.removeFromSuperview()
-                bubbles.removeAll { $0 === bubble }
-                return
-            }
+            guard present(), gesture != nil || answer.mark == "question", !answer.reply.isEmpty else { return drop() }
             let note = Note(mark: gesture ?? "question", trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading,
                             reply: answer.reply, steps: gesture == nil ? Array(answer.steps.prefix(2)) : [])
             notes.append(note)
