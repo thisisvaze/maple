@@ -9,7 +9,7 @@ nonisolated struct Muse: Sendable {
     }
 
     /// The API defaults to high, which spent 662 reasoning tokens on "say hi" (28 Oct). Raise it only where thinking pays.
-    enum Effort: String, Sendable { case low, medium, high }
+    enum Effort: String, Sendable { case minimal, low, medium, high }
 
     struct Reply: Sendable {
         let text: String
@@ -32,22 +32,30 @@ nonisolated struct Muse: Sendable {
         return Muse(key: key)
     }
 
-    func respond(_ parts: [Part], instructions: String? = nil, effort: Effort = .low, maxOutputTokens: Int = 4000) async throws -> Reply {
-        let content = parts.map { part -> Request.Content in
-            switch part {
-            case .text(let text): Request.Content(type: "input_text", text: text)
-            case .png(let data): Request.Content(type: "input_image", imageUrl: "data:image/png;base64," + data.base64EncodedString())
+    /// `schema` (JSON Schema, strict subset) makes the reply text a JSON object that matches it.
+    func respond(_ parts: [Part], instructions: String? = nil, schema: Data? = nil, effort: Effort = .low, maxOutputTokens: Int = 4000) async throws -> Reply {
+        let content: [[String: String]] = parts.map {
+            switch $0 {
+            case .text(let text): ["type": "input_text", "text": text]
+            case .png(let data): ["type": "input_image", "image_url": "data:image/png;base64," + data.base64EncodedString()]
             }
         }
-        let body = Request(model: model, instructions: instructions, input: [.init(content: content)],
-                           reasoning: ["effort": effort.rawValue], maxOutputTokens: maxOutputTokens)
+        var body: [String: Any] = [
+            "model": model,
+            "input": [["type": "message", "role": "user", "content": content]],
+            "reasoning": ["effort": effort.rawValue],
+            "max_output_tokens": maxOutputTokens,
+            "store": false,  // Maple keeps its own threads; nothing needs to live on Meta's side
+        ]
+        if let instructions { body["instructions"] = instructions }
+        if let schema {
+            body["text"] = ["format": ["type": "json_schema", "name": "answer", "strict": true, "schema": try JSONSerialization.jsonObject(with: schema)]]
+        }
         var request = URLRequest(url: Self.endpoint, timeoutInterval: 120)  // high effort can think for 30 s or more
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        request.httpBody = try encoder.encode(body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {
@@ -71,25 +79,6 @@ nonisolated struct Muse: Sendable {
         guard !text.isEmpty else { throw Failure("Muse returned no text") }
         return Reply(text: text, outputTokens: response.usage?.outputTokens ?? 0,
                      reasoningTokens: response.usage?.outputTokensDetails?.reasoningTokens ?? 0)
-    }
-
-    private struct Request: Encodable {
-        let model: String
-        let instructions: String?
-        let input: [Message]
-        let reasoning: [String: String]
-        let maxOutputTokens: Int
-        var store = false  // Maple keeps its own threads; nothing needs to live on Meta's side
-
-        struct Message: Encodable {
-            var type = "message", role = "user"
-            let content: [Content]
-        }
-        struct Content: Encodable {
-            let type: String
-            var text: String?
-            var imageUrl: String?
-        }
     }
 
     private struct Response: Decodable {

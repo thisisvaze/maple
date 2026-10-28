@@ -28,11 +28,11 @@ They run on the Mac, without the simulator.
 
 ```sh
 swiftc -swift-version 6 -parse-as-library Maple/Grouping.swift checks/grouping-check.swift -o /tmp/grouping-check && /tmp/grouping-check
-swiftc -swift-version 6 -parse-as-library Maple/Muse.swift checks/muse-check.swift -o /tmp/muse-check
-MODEL_API_KEY=... /tmp/muse-check   # parses a recorded reply, then one live call that reads "2 + 2 = ?" from a PNG
+swiftc -swift-version 6 -parse-as-library Maple/Muse.swift Maple/Agent.swift checks/muse-check.swift -o /tmp/muse-check
+MODEL_API_KEY=... /tmp/muse-check   # parses a recorded reply, then 4 live calls: reading a PNG, a ?, plain writing, a double dot
 ```
 
-28 Oct: the live call answered "4" in 1.9 s with 104 output tokens at low effort. At the API's default high effort, "say hi" took 678.
+28 Oct, low effort: reading "2 + 2 = ?" took 1.9–2.3 s and about 100–200 output tokens (at the API's default high effort, "say hi" took 678). The agent read "x² = 49 ?" as a question with a nudge, a hint and "x = 7 or x = -7" in 2.6 s, left plain writing alone in 2.3 s, and explained a double-dotted word in 3.9 s.
 
 ## Run it
 
