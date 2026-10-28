@@ -25,6 +25,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var saveTask: Task<Void, Never>?
     var saveErrorShown = false
     let history = UndoManager()
+    var marks: Marks!
 
     // PencilKit registers stroke undo with the responder chain's manager; own it so the finger taps can reach it.
     override var undoManager: UndoManager? { history }
@@ -63,13 +64,16 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         canvas.minimumZoomScale = 0.1
         canvas.maximumZoomScale = 6
         canvas.contentSize = CGSize(width: Self.sheet, height: Self.sheet)
+        var notes: [Note] = []
         do {
             canvas.drawing = try page.load()
+            notes = try page.loadNotes()
         } catch {
             loadError = error  // never save over a file we couldn't read
             canvas.isUserInteractionEnabled = false
         }
         canvas.delegate = self  // after loading, so the load itself isn't an edit
+        marks = Marks(canvas: canvas, page: page, notes: notes)
 
         let undoTap = UITapGestureRecognizer(target: self, action: #selector(undo))
         undoTap.numberOfTouchesRequired = 2
@@ -93,6 +97,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         laidOut = true
         let v = UserDefaults.standard.array(forKey: page.viewportKey) as? [Double] ?? []
         if v.count == 3 { show(CGPoint(x: v[0], y: v[1]), zoom: v[2]) } else { show(CGPoint(x: Self.sheet / 2, y: Self.sheet / 2), zoom: 1) }
+        marks.layout()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -112,6 +117,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        marks.stop()
         saveNow()  // the gallery reads the file next, for the thumbnail
     }
 
@@ -136,6 +142,14 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
         if canvas.tool is PKEraserTool { canvas.tool = eraser }  // keep its on-screen width
+    }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { marks.layout() }
+
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { marks.penDown() }
+
+    func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        if canvas.tool is PKInkingTool { marks.penUp() }  // erasing isn't a mark
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {

@@ -8,6 +8,7 @@ nonisolated struct Page: Identifiable, Hashable {
     var edited: Date  // when its ink was last saved, or when it was made
     var id: URL { url }
     var ink: URL { url.appending(path: "ink.drawing") }
+    var notesFile: URL { url.appending(path: "notes.json") }
     var viewportKey: String { "viewport-\(url.lastPathComponent)" }
 
     /// Last written in first.
@@ -27,6 +28,10 @@ nonisolated struct Page: Identifiable, Hashable {
 
     func load() throws -> PKDrawing {
         FileManager.default.fileExists(atPath: ink.path) ? try PKDrawing(data: Data(contentsOf: ink)) : PKDrawing()
+    }
+
+    func loadNotes() throws -> [Note] {
+        FileManager.default.fileExists(atPath: notesFile.path) ? try JSONDecoder().decode([Note].self, from: Data(contentsOf: notesFile)) : []
     }
 
     func delete() throws {

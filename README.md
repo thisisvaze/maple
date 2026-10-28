@@ -11,8 +11,9 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Gallery: page cards with cached thumbnails (light and dark), + for a new page, zoom open and close, select and delete
 - [x] Two-finger tap undo, three-finger tap redo, Pencil double-tap swaps pen and eraser
 - [x] Muse Spark 1.3 client (Responses API: text and PNG input, low reasoning effort by default)
-- [ ] Marks: `?`, double dot and empty box wake an agent
-- [ ] Answers: quiet dots that open into bubbles, nudge and hint before the answer
+- [x] Marks: a `?` or a double dot wakes the agent 0.6 s after the pen rests
+- [x] Answers: quiet dots that open into glass bubbles; a `?` opens a nudge, then a hint, then the answer; saved with the page
+- [ ] Empty box: the agent draws inside it
 - [ ] Agent ink: drawings and graphs inside a box
 - [ ] SAM 3.1 for circled regions; multi-agent shared memory
 
@@ -31,6 +32,8 @@ swiftc -swift-version 6 -parse-as-library Maple/Grouping.swift checks/grouping-c
 swiftc -swift-version 6 -parse-as-library Maple/Muse.swift Maple/Agent.swift checks/muse-check.swift -o /tmp/muse-check
 MODEL_API_KEY=... /tmp/muse-check   # parses a recorded reply, then 4 live calls: reading a PNG, a ?, plain writing, a double dot
 ```
+
+`checks/pipeline-check.swift` runs on an iPad simulator. It writes "x² = 49 ?" as PencilKit strokes and sends them through the app's own grouping, red crops and agent. Its header has the commands. 28 Oct: Muse called it a question and answered in 3.6 s.
 
 28 Oct, low effort: reading "2 + 2 = ?" took 1.9–2.3 s and about 100–200 output tokens (at the API's default high effort, "say hi" took 678). The agent read "x² = 49 ?" as a question with a nudge, a hint and "x = 7 or x = -7" in 2.6 s, left plain writing alone in 2.3 s, and explained a double-dotted word in 3.9 s.
 
