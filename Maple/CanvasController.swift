@@ -7,9 +7,12 @@ struct Paper: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: CanvasController, context: Context) {}
 }
 
-/// One page of paper: Apple Pencil writes, two fingers pan and pinch.
-final class CanvasController: UIViewController, PKCanvasViewDelegate {
-    static let penWidth: CGFloat = 1.8  // calibration knob: fine handwriting with a real Pencil
+/// One page of paper: Apple Pencil writes, two fingers pan and pinch, two-finger tap undoes, three-finger tap redoes,
+/// and double-tapping the Pencil swaps pen and eraser.
+final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilInteractionDelegate {
+    // Calibration knobs: tune by feel with a real Pencil.
+    static let penWidth: CGFloat = 1.8  // fine handwriting
+    static let eraserWidth: CGFloat = 41  // on screen; PencilKit clamps to 16.4–80.4 page points
     // ponytail: a fixed sheet stands in for an infinite one; recenter the ink if someone ever reaches an edge.
     static let sheet: CGFloat = 131_072
 
@@ -21,6 +24,15 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate {
     var laidOut = false
     var saveTask: Task<Void, Never>?
     var saveErrorShown = false
+    let history = UndoManager()
+
+    // PencilKit registers stroke undo with the responder chain's manager; own it so the finger taps can reach it.
+    override var undoManager: UndoManager? { history }
+    // Keep the system's three-finger editing menu from competing with redo.
+    override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
+
+    /// The pixel eraser rubs out only what it touches, eraserWidth wide on screen at any zoom.
+    var eraser: PKEraserTool { PKEraserTool(.bitmap, width: Self.eraserWidth / canvas.zoomScale) }
 
     init(page: Page) {
         self.page = page
@@ -58,6 +70,17 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate {
             canvas.isUserInteractionEnabled = false
         }
         canvas.delegate = self  // after loading, so the load itself isn't an edit
+
+        let undoTap = UITapGestureRecognizer(target: self, action: #selector(undo))
+        undoTap.numberOfTouchesRequired = 2
+        undoTap.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
+        let redoTap = UITapGestureRecognizer(target: self, action: #selector(redo))
+        redoTap.numberOfTouchesRequired = 3
+        redoTap.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
+        undoTap.require(toFail: redoTap)
+        canvas.addGestureRecognizer(undoTap)
+        canvas.addGestureRecognizer(redoTap)
+        canvas.addInteraction(UIPencilInteraction(delegate: self))
         // Resign-active comes before the app switcher can kill us without a background notification.
         NotificationCenter.default.addObserver(self, selector: #selector(saveNow), name: UIApplication.willResignActiveNotification, object: nil)
     }
@@ -101,6 +124,18 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate {
     func show(_ center: CGPoint, zoom: CGFloat) {
         canvas.zoomScale = zoom
         canvas.contentOffset = CGPoint(x: center.x * zoom - canvas.bounds.width / 2, y: center.y * zoom - canvas.bounds.height / 2)
+    }
+
+    @objc func undo() { if history.canUndo { history.undo() } }
+    @objc func redo() { if history.canRedo { history.redo() } }
+
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        guard UIPencilInteraction.preferredTapAction != .ignore else { return }
+        canvas.tool = canvas.tool is PKEraserTool ? pen : eraser
+    }
+
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+        if canvas.tool is PKEraserTool { canvas.tool = eraser }  // keep its on-screen width
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
