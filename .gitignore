@@ -1,0 +1,7 @@
+Secrets.xcconfig
+.env
+Maple.xcodeproj/
+xcuserdata/
+DerivedData/
+build/
+.DS_Store

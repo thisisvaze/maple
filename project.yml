@@ -1,0 +1,35 @@
+# Generate Maple.xcodeproj with `xcodegen`; the project file itself isn't committed.
+name: Maple
+options:
+  bundleIdPrefix: dev.maple
+  deploymentTarget:
+    iOS: "26.0"
+targets:
+  Maple:
+    type: application
+    platform: iOS
+    sources: [Maple]
+    configFiles:
+      Debug: Config.xcconfig
+      Release: Config.xcconfig
+    info:
+      path: Maple/Info.plist
+      properties:
+        CFBundleDisplayName: Maple
+        MODEL_API_KEY: $(MODEL_API_KEY)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.maple.muse
+        DEVELOPMENT_TEAM: 2FN5ZL5G56
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "6.0"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
