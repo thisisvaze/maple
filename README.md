@@ -7,6 +7,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 ## Status
 
 - [x] iPad project
+- [x] Pencil-only canvas on a large sheet: two-finger pan and pinch, autosave a second after the pen pauses
 
 ## Run it
 

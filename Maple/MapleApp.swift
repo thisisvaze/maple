@@ -4,7 +4,10 @@ import SwiftUI
 struct MapleApp: App {
     var body: some Scene {
         WindowGroup {
-            Color(uiColor: .paper).ignoresSafeArea()
+            Paper(page: Page.all().first ?? Page.create())
+                .ignoresSafeArea()
+                .statusBarHidden()
+                .persistentSystemOverlays(.hidden)
         }
     }
 }
