@@ -1,7 +1,7 @@
 import Foundation
 
 /// Meta's Muse Spark over the Responses API: https://dev.meta.ai/docs/quickstart
-/// Foundation only, so `checks/spark.swift` can run it on the Mac.
+/// Foundation only, so `checks/muse-check.swift` can run it on the Mac.
 nonisolated struct Muse: Sendable {
     enum Part: Sendable {
         case text(String)

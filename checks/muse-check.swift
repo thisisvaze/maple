@@ -1,6 +1,6 @@
 // Parses a recorded Muse response, then asks Muse Spark to read a picture of "2 + 2 = ?" (one live call, under a cent).
-//   swiftc -swift-version 6 -parse-as-library Maple/Muse.swift checks/spark.swift -o /tmp/spark-check
-//   MODEL_API_KEY=... /tmp/spark-check
+//   swiftc -swift-version 6 -parse-as-library Maple/Muse.swift checks/muse-check.swift -o /tmp/muse-check
+//   MODEL_API_KEY=... /tmp/muse-check
 import CoreText
 import Foundation
 import ImageIO
