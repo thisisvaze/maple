@@ -3,12 +3,7 @@ import SwiftUI
 @main
 struct MapleApp: App {
     var body: some Scene {
-        WindowGroup {
-            Paper(page: Page.all().first ?? Page.create())
-                .ignoresSafeArea()
-                .statusBarHidden()
-                .persistentSystemOverlays(.hidden)
-        }
+        WindowGroup { Gallery() }
     }
 }
 
