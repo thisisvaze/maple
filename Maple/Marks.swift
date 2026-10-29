@@ -18,6 +18,7 @@ final class Marks {
     let canvas: PKCanvasView
     let page: Page
     let agent = Muse.bundled.map { Agent(muse: $0) }
+    let jev = Jev.bundled
     var notes: [Note]
     var bubbles: [Bubble] = []
     var waiting: Task<Void, Never>?
@@ -30,6 +31,7 @@ final class Marks {
         self.notes = notes
         notes.filter { $0.mark != "frame" }.forEach { add(Bubble(anchor: $0.anchor, zoom: $0.zoom, note: $0)) }  // a drawing is its own ink
         if agent == nil { logger.error("No MODEL_API_KEY in Secrets.xcconfig: marks are off") }
+        if jev == nil { logger.error("No TYPESAFE_API_KEY in Secrets.xcconfig: only double dots are read") }
     }
 
     func penDown() { waiting?.cancel() }
@@ -56,7 +58,6 @@ final class Marks {
         }
         let dots = Grouping.doubleDot(recent, reach: Self.doubleDotReach / zoom)
         let trigger = dots ?? Grouping.candidate(recent)
-        // ponytail: every pen pause costs one Muse call (~0.5¢); filter on the device first if pages get long.
         guard !trigger.isEmpty, trigger != lastTrigger, !notes.contains(where: { !Set($0.trigger).isDisjoint(with: trigger) }) else { return }
         lastTrigger = trigger
 
@@ -76,14 +77,27 @@ final class Marks {
         let threads = notes.filter { around.contains($0.anchor) }.map { Agent.Thread(id: $0.id, reading: $0.reading, shown: $0.shown) }
         let target = notes.filter { mark.insetBy(dx: -60 / zoom, dy: -60 / zoom).contains($0.anchor) }
             .min { hypot($0.anchor.x - mark.midX, $0.anchor.y - mark.midY) < hypot($1.anchor.x - mark.midX, $1.anchor.y - mark.midY) }?.id
-        let gesture = dots == nil ? nil : "double_dot"
-
-        // A double dot is known on the device, so it shows thinking at once; a ? or a box only once Muse calls it one.
-        let bubble = gesture == nil ? nil : add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom))
+        // A double dot is known on the device, so it shows thinking at once. Anything else, Jev looks at first, and only a
+        // ? or an empty box goes on to Muse.
+        let thinking = dots == nil ? nil : add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom))
         Task {
             let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
-            await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target,
-                      trigger: trigger, mark: mark, zoom: zoom, bubble: bubble)
+            var gesture = "double_dot"
+            if dots == nil {
+                guard let jev else { return }
+                let start = ContinuousClock.now
+                do { gesture = try await jev.mark(nearPNG) } catch {
+                    return logger.error("jev failed: \(error.localizedDescription, privacy: .public)")
+                }
+                logger.notice("jev mark=\(gesture, privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
+            }
+            switch gesture {
+            case "question", "double_dot":
+                await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, mark: mark, zoom: zoom, bubble: thinking)
+            case "frame":
+                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, zoom: zoom, bubble: add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom)))
+            default: break  // writing, circles, underlines and the rest are the person's own; nothing wakes
+            }
         }
     }
 
@@ -98,7 +112,8 @@ final class Marks {
         bubbles.removeAll { $0 === bubble }
     }
 
-    func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String?, threads: [Agent.Thread], target: String?,
+    /// Answers a ? (as a quiet dot, with a nudge and a hint first) or a double dot (its dot breathing while Muse reads).
+    func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?,
              trigger: [String], mark: CGRect, zoom: CGFloat, bubble: Bubble?) async {
         guard present(trigger) else { return remove(bubble) }
         asking += 1
@@ -106,15 +121,10 @@ final class Marks {
         let start = ContinuousClock.now
         do {
             let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target)
-            logger.notice("mark=\(answer.mark, privacy: .public) gesture=\(gesture ?? "-", privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
-            guard present(trigger) else { return remove(bubble) }
-            if gesture == nil, answer.mark == "frame" {
-                let thinking = add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom))
-                return await draw(agent, near, around, reading: answer.reading, threads: threads, trigger: trigger, box: mark, zoom: zoom, bubble: thinking)
-            }
-            guard gesture != nil || answer.mark == "question", !answer.reply.isEmpty else { return remove(bubble) }
-            let note = Note(mark: gesture ?? "question", trigger: trigger, anchor: Self.anchor(mark, zoom), zoom: zoom, reading: answer.reading,
-                            reply: answer.reply, steps: gesture == nil ? Array(answer.steps.prefix(2)) : [])
+            logger.notice("answered gesture=\(gesture, privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
+            guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
+            let note = Note(mark: gesture, trigger: trigger, anchor: Self.anchor(mark, zoom), zoom: zoom, reading: answer.reading,
+                            reply: answer.reply, steps: gesture == "question" ? Array(answer.steps.prefix(2)) : [])
             notes.append(note)
             save()
             if let bubble { bubble.note = note } else { add(Bubble(anchor: note.anchor, zoom: zoom, note: note)) }
@@ -129,14 +139,14 @@ final class Marks {
     }
 
     /// Fills an empty box with the agent's ink: a drawing, or a graph the app computes. The box's dot breathes meanwhile.
-    func draw(_ agent: Agent, _ near: Data, _ around: Data, reading: String, threads: [Agent.Thread],
+    func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread],
               trigger: [String], box: CGRect, zoom: CGFloat, bubble: Bubble) async {
         guard present(trigger) else { return remove(bubble) }
         asking += 1
         defer { asking -= 1 }
         let start = ContinuousClock.now
         do {
-            let drawing = try await agent.draw(near: near, around: around, size: box.size, reading: reading, threads: threads)
+            let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads)
             guard present(trigger) else { return remove(bubble) }
             let lines = try drawing.lines(in: box.size)
             // Bound the filled-in points too: a few huge strokes must not become millions of PencilKit samples.
@@ -150,7 +160,7 @@ final class Marks {
             let before = canvas.drawing
             var after = before
             after.strokes += strokes
-            place(after, note: Note(mark: "frame", trigger: trigger, anchor: Self.anchor(box, zoom), zoom: zoom, reading: reading,
+            place(after, note: Note(mark: "frame", trigger: trigger, anchor: Self.anchor(box, zoom), zoom: zoom, reading: drawing.reading,
                                     reply: drawing.say, steps: []), replacing: before)
             remove(bubble)
         } catch {
@@ -158,7 +168,7 @@ final class Marks {
             bubble.retry = { [weak self, weak bubble] in
                 guard let bubble else { return }
                 bubble.retry = nil
-                Task { await self?.draw(agent, near, around, reading: reading, threads: threads, trigger: trigger, box: box, zoom: zoom, bubble: bubble) }
+                Task { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, zoom: zoom, bubble: bubble) }
             }
         }
     }

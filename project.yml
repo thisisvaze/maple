@@ -17,6 +17,7 @@ targets:
       properties:
         CFBundleDisplayName: Maple
         MODEL_API_KEY: $(MODEL_API_KEY)
+        TYPESAFE_API_KEY: $(TYPESAFE_API_KEY)
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false

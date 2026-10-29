@@ -1,8 +1,8 @@
-// Parses a recorded Muse response, then makes six live calls (a few cents): Muse reads "2 + 2 = ?" from a PNG; the agent
-// answers a written ?, ignores plain writing, answers a double dot, and draws in two boxes (a diagram and a graph),
-// saved as PNGs to the folder given, or the temporary folder.
-//   swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check
-//   MODEL_API_KEY=... /tmp/muse-check [folder]
+// Parses a recorded Muse reply and checks Jev's thresholds offline, then makes live calls in the app's order (a few
+// cents): Jev reads each mark, and Muse answers a written ? and a double dot, and draws in two boxes (a diagram and a
+// graph), saved as PNGs to the folder given, or the temporary folder.
+//   swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
+//   MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]
 import CoreText
 import Foundation
 import ImageIO
@@ -24,22 +24,36 @@ struct Check {
         do { _ = try Muse.reply(from: cut); preconditionFailure("a cut-off answer must throw") } catch {}
         print("parse ok")
 
-        guard let key = ProcessInfo.processInfo.environment["MODEL_API_KEY"], !key.isEmpty else { return print("no MODEL_API_KEY: skipped the live calls") }
-        let muse = Muse(key: key), agent = Agent(muse: muse)
+        // Jev's rule: a ? needs 0.35, then 0.85 from the focused look; anything else needs 0.75, or it's plain writing.
+        precondition(Jev.decide("question", ["question": 0.5], confirmedQuestion: 0.9) == "question", "an unsure ? confirmed")
+        precondition(Jev.decide("question", ["question": 0.5], confirmedQuestion: 0.6) == "writing", "an unsure ? not confirmed")
+        precondition(Jev.decide("frame", ["frame": 0.8], confirmedQuestion: 0) == "frame", "a sure box")
+        precondition(Jev.decide("frame", ["frame": 0.6], confirmedQuestion: 0) == "writing", "an unsure box")
+        print("thresholds ok")
+
+        let env = ProcessInfo.processInfo.environment
+        guard let key = env["MODEL_API_KEY"], !key.isEmpty, let jevKey = env["TYPESAFE_API_KEY"], !jevKey.isEmpty else {
+            return print("no MODEL_API_KEY or TYPESAFE_API_KEY: skipped the live calls")
+        }
+        let muse = Muse(key: key), agent = Agent(muse: muse), jev = Jev(key: jevKey)
         var start = ContinuousClock.now
         let reply = try await muse.respond([.text("What is the answer to what's written? Reply with the number only."), .png(picture([("2 + 2 = ?", false)]))])
         print("read: \(reply.text.debugDescription) in \(start.duration(to: .now)), \(reply.outputTokens) output tokens")
         precondition(reply.text.contains("4"), "Muse didn't read the picture")
 
         start = .now
-        let question = try await agent.ask(near: picture([("49 ", false), ("?", true)]), around: picture([("x² = 49 ", false), ("?", true)]), gesture: nil, threads: [], target: nil)
-        print("question: \(question) in \(start.duration(to: .now))")
-        precondition(question.mark == "question" && question.reply.contains("7") && question.steps.count == 2, "a written ? is answered, with a nudge and a hint")
+        let questionNear = picture([("49 ", false), ("?", true)])
+        let questionMark = try await jev.mark(questionNear)
+        let jevMs = start.duration(to: .now)
+        precondition(questionMark == "question", "Jev sees the ?: \(questionMark)")
+        let question = try await agent.ask(near: questionNear, around: picture([("x² = 49 ", false), ("?", true)]), gesture: "question", threads: [], target: nil)
+        print("question: Jev \(jevMs), then \(question) in \(start.duration(to: .now))")
+        precondition(question.reply.contains("7") && question.steps.count == 2, "a written ? is answered, with a nudge and a hint")
 
         start = .now
-        let writing = try await agent.ask(near: picture([("the cell ", false), ("wall", true)]), around: picture([("the cell ", false), ("wall", true)]), gesture: nil, threads: [], target: nil)
-        print("writing: \(writing) in \(start.duration(to: .now))")
-        precondition(writing.mark == "other" && writing.reply.isEmpty, "plain writing wakes nothing")
+        let writing = try await jev.mark(picture([("the cell ", false), ("wall", true)]))
+        print("writing: Jev says \(writing) in \(start.duration(to: .now))")
+        precondition(writing != "question" && writing != "frame", "plain writing wakes nothing")
 
         start = .now
         let dots = try await agent.ask(near: picture([("mitochondria", false)]), around: picture([("mitochondria", false)]), gesture: "double_dot", threads: [], target: nil)
@@ -51,9 +65,9 @@ struct Check {
         for (label, kind) in [("water cycle", "ink"), ("y = x^2 - 4", "plot")] {
             start = .now
             let box = CGSize(width: 360, height: 240), image = boxed(label)
-            let classified = try await agent.ask(near: image, around: image, gesture: nil, threads: [], target: nil)
-            precondition(classified.mark == "frame", "an empty box under \(label) is a frame: \(classified.mark)")
-            let drawing = try await agent.draw(near: image, around: image, size: box, reading: classified.reading, threads: [])
+            let mark = try await jev.mark(image)
+            precondition(mark == "frame", "an empty box under \(label) is a frame: \(mark)")
+            let drawing = try await agent.draw(near: image, around: image, size: box, threads: [])
             let lines = try drawing.lines(in: box, font: font)
             print("box \(label.debugDescription): \(drawing.kind), \(lines.count) lines, say \(drawing.say.debugDescription) in \(start.duration(to: .now))")
             precondition(drawing.kind == kind, "expected \(kind)")
@@ -105,17 +119,17 @@ struct Check {
 
     /// Runs of text in black, or red for the newest ink, on white, as a PNG.
     static func picture(_ runs: [(String, red: Bool)]) -> Data {
-        let context = CGContext(data: nil, width: 640, height: 160, bitsPerComponent: 8, bytesPerRow: 0,
+        let context = CGContext(data: nil, width: 640, height: 320, bitsPerComponent: 8, bytesPerRow: 0,
                                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
         context.setFillColor(gray: 1, alpha: 1)
-        context.fill(CGRect(x: 0, y: 0, width: 640, height: 160))
+        context.fill(CGRect(x: 0, y: 0, width: 640, height: 320))
         let font = CTFontCreateWithName("Bradley Hand" as CFString, 56, nil)
         let text = NSMutableAttributedString()
         for (run, red) in runs {
             let color = red ? CGColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1) : CGColor(gray: 0.1, alpha: 1)
             text.append(NSAttributedString(string: run, attributes: [.init(kCTFontAttributeName as String): font, .init(kCTForegroundColorAttributeName as String): color]))
         }
-        context.textPosition = CGPoint(x: 30, y: 56)
+        context.textPosition = CGPoint(x: 30, y: 136)  // Jev takes 300 to 1568 px a side
         CTLineDraw(CTLineCreateWithAttributedString(text), context)
         let data = NSMutableData()
         let png = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)!

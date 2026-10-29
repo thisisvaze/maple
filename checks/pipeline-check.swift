@@ -1,11 +1,11 @@
-// Runs marks through the app's own path on an iPad simulator: PencilKit strokes → Grouping → red crops → Muse → agent ink.
+// Runs marks through the app's own path on an iPad simulator: PencilKit strokes → Grouping → red crops → Jev → Muse → agent ink.
 // Strokes are letter outlines from a handwriting font: "x² = 49 ?" (its dot last), then "triangle" with an empty box under it.
 // It runs inside a bare .app, because PencilKit saves drawing state to preferences and traps without a bundle ID.
 //   S=$(mktemp -d); mkdir $S/Check.app; xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator \
 //     -swift-version 6 -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{Marks,Bubble,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,AgentPen}.swift checks/pipeline-check.swift -o $S/Check.app/pipeline
+//     Maple/{Marks,Bubble,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,AgentPen,Jev}.swift checks/pipeline-check.swift -o $S/Check.app/pipeline
 //   plutil -create xml1 $S/Check.app/Info.plist; plutil -insert CFBundleIdentifier -string dev.maple.check $S/Check.app/Info.plist; cp Maple/futural.jhf $S/Check.app/
-//   SIMCTL_CHILD_MODEL_API_KEY=... xcrun simctl spawn booted $S/Check.app/pipeline $S   # writes near.png, around.png and box.png
+//   SIMCTL_CHILD_MODEL_API_KEY=... SIMCTL_CHILD_TYPESAFE_API_KEY=... xcrun simctl spawn booted $S/Check.app/pipeline $S   # writes near.png, around.png and box.png
 import PencilKit
 
 @main
@@ -30,18 +30,23 @@ struct Check {
         precondition(boxed.trigger == [Marks.id(box)], "the box alone is the mark")
         print("box crops ok")
 
-        guard let key = ProcessInfo.processInfo.environment["MODEL_API_KEY"], !key.isEmpty else { return print("no MODEL_API_KEY: skipped Muse") }
-        let agent = Agent(muse: Muse(key: key))
+        let env = ProcessInfo.processInfo.environment
+        guard let key = env["MODEL_API_KEY"], !key.isEmpty, let jevKey = env["TYPESAFE_API_KEY"], !jevKey.isEmpty else {
+            return print("no MODEL_API_KEY or TYPESAFE_API_KEY: skipped Jev and Muse")
+        }
+        let agent = Agent(muse: Muse(key: key)), jev = Jev(key: jevKey)
         var clock = ContinuousClock.now
-        let answer = try await agent.ask(near: nearPNG, around: aroundPNG, gesture: nil, threads: [], target: nil)
+        let questionMark = try await jev.mark(nearPNG)
+        precondition(questionMark == "question", "Jev sees the ?: \(questionMark)")
+        let answer = try await agent.ask(near: nearPNG, around: aroundPNG, gesture: "question", threads: [], target: nil)
         print("\(answer) in \(clock.duration(to: .now))")
-        precondition(answer.mark == "question" && answer.reply.contains("7"), "Muse answers the written ?")
+        precondition(answer.reply.contains("7"), "Muse answers the written ?")
         _ = mark
 
         clock = .now
-        let reading = try await agent.ask(near: boxed.near, around: boxed.around, gesture: nil, threads: [], target: nil)
-        precondition(reading.mark == "frame", "the empty box is a frame: \(reading.mark)")
-        let drawing = try await agent.draw(near: boxed.near, around: boxed.around, size: boxed.mark.size, reading: reading.reading, threads: [])
+        let boxMark = try await jev.mark(boxed.near)
+        precondition(boxMark == "frame", "Jev sees an empty box: \(boxMark)")
+        let drawing = try await agent.draw(near: boxed.near, around: boxed.around, size: boxed.mark.size, threads: [])
         let ink = try drawing.lines(in: boxed.mark.size).map { line in
             AgentPen.stroke(line.map { CGPoint(x: boxed.mark.minX + $0.x, y: boxed.mark.minY + $0.y) }, width: AgentPen.width(at: 1), step: 2)
         }

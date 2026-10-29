@@ -28,7 +28,7 @@ struct Check {
 
         // Ink from the model: invalid points dropped, the rest clamped into the box, labels written in the pen font.
         let json = #"""
-        {"kind": "ink", "say": "A triangle", "plot": {"expression": "", "xMin": 0, "xMax": 1, "yMin": 0, "yMax": 1},
+        {"reading": "triangle", "kind": "ink", "say": "A triangle", "plot": {"expression": "", "xMin": 0, "xMax": 1, "yMin": 0, "yMax": 1},
          "strokes": [[[20, 180], [150, 20], [280, 180], [20, 180]], [[10, 10], [999, -5], [1]]],
          "labels": [{"text": "A", "x": 10, "y": 185, "size": 12}]}
         """#

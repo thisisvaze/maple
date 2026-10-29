@@ -13,6 +13,7 @@ nonisolated struct Drawing: Decodable, Sendable {
         var xMin, xMax, yMin, yMax: Double
     }
 
+    var reading: String  // what the box's label says
     var kind: String  // "ink" or "plot"
     var say: String  // one line about the drawing, for follow-up questions
     var strokes: [[[Double]]]

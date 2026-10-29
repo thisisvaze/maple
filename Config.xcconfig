@@ -1,3 +1,4 @@
-// Your Meta Model API key goes in Secrets.xcconfig (gitignored): MODEL_API_KEY = <key>
+// Your keys go in Secrets.xcconfig (gitignored): MODEL_API_KEY = <Meta Model API key>, TYPESAFE_API_KEY = <TypeSafe key for Jev>
 MODEL_API_KEY =
+TYPESAFE_API_KEY =
 #include? "Secrets.xcconfig"
