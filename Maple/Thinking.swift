@@ -98,14 +98,10 @@ final class Thinking: UIView {
         isUserInteractionEnabled = false
         contentMode = .redraw
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: Thinking, _: UITraitCollection) in view.setNeedsDisplay() }
-        for (name, running) in [(UIApplication.willResignActiveNotification, false), (UIApplication.didBecomeActiveNotification, true)] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.active = running; self?.animate() }
-            }
-        }
-        NotificationCenter.default.addObserver(forName: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.animate() }
-        }
+        let center = NotificationCenter.default  // selector observers leave with the view
+        center.addObserver(self, selector: #selector(pause), name: UIApplication.willResignActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(resume), name: UIApplication.didBecomeActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(animate), name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -117,8 +113,11 @@ final class Thinking: UIView {
 
     override var isHidden: Bool { didSet { animate() } }
 
+    @objc func pause() { active = false; animate() }
+    @objc func resume() { active = true; animate() }
+
     /// Runs only while shown, in the foreground, and without Reduce Motion, which keeps a still frame.
-    func animate() {
+    @objc func animate() {
         let running = window != nil && !isHidden && active && !UIAccessibility.isReduceMotionEnabled
         if running, link == nil {
             lastFrame = 0
