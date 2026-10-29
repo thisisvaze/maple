@@ -13,6 +13,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Muse Spark 1.3 client (Responses API: text and PNG input, low reasoning effort by default)
 - [x] Marks: a `?` or a double dot wakes the agent 0.6 s after the pen rests
 - [x] Answers: quiet dots that open into glass bubbles; a `?` opens a nudge, then a hint, then the answer; saved with the page
+- [x] App icon: a pencil scribble that straightens into a glowing arrow, a rough thought the AI turns into a direction
 - [ ] Empty box: the agent draws inside it
 - [ ] Agent ink: drawings and graphs inside a box
 - [ ] SAM 3.1 for circled regions; multi-agent shared memory
