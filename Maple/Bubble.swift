@@ -1,7 +1,7 @@
 import UIKit
 
-/// An answer beside its mark: a quiet dot that opens into a glass bubble. A ?'s nudge and hint open one at a time before
-/// the answer. While Muse answers, the dot is the thinking orb; it turns orange if asking failed, and a tap tries again.
+/// An answer beside its mark: a quiet dot that opens into a glass bubble. While Muse answers, the dot is the thinking
+/// orb; it turns orange if asking failed, and a tap tries again.
 /// It lives in the canvas's content, top-left at `anchor`, and grows and shrinks with the page like ink.
 final class Bubble: UIView {
     static let width: CGFloat = 300
@@ -9,7 +9,6 @@ final class Bubble: UIView {
     let zoom: CGFloat  // the page's zoom when its mark was made
     var note: Note? { didSet { update() } }  // nil while Muse is reading
     var retry: (() -> Void)? { didSet { update() } }
-    var opened: (Note) -> Void = { _ in }  // a step was opened; save how far
     var deleted: () -> Void = {}
     var open = false
 
@@ -17,7 +16,6 @@ final class Bubble: UIView {
     let orb = Thinking(style: .orb)
     let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     let label = UILabel()
-    let more = UIButton(configuration: .plain())  // "hint ›" or "answer ›"
     let close = UIButton(configuration: .plain())
     let trash = UIButton(configuration: .plain())
 
@@ -37,15 +35,12 @@ final class Bubble: UIView {
         label.textColor = Marks.ink
         label.numberOfLines = 0
         glass.contentView.addSubview(label)
-        for (button, title, image) in [(more, "", nil), (close, "Close", "minus"), (trash, "Delete", "trash")] {
+        for (button, title, image) in [(close, "Close", "minus"), (trash, "Delete", "trash")] {
             button.configuration?.baseForegroundColor = Marks.ink
-            if let image {
-                button.configuration?.image = UIImage(systemName: image)
-                button.accessibilityLabel = title
-            }
+            button.configuration?.image = UIImage(systemName: image)
+            button.accessibilityLabel = title
             glass.contentView.addSubview(button)
         }
-        more.addAction(UIAction { [unowned self] _ in step() }, for: .primaryActionTriggered)
         close.addAction(UIAction { [unowned self] _ in toggle(false) }, for: .primaryActionTriggered)
         trash.addAction(UIAction { [unowned self] _ in deleted() }, for: .primaryActionTriggered)
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
@@ -58,7 +53,7 @@ final class Bubble: UIView {
     /// An open answer lets the Pencil write through it: only its buttons take touches.
     override func point(inside p: CGPoint, with event: UIEvent?) -> Bool {
         guard open else { return super.point(inside: p, with: event) }
-        return [more, close, trash].contains { !$0.isHidden && $0.frame.insetBy(dx: -6, dy: -6).contains(p) }
+        return [close, trash].contains { $0.frame.insetBy(dx: -6, dy: -6).contains(p) }
     }
 
     @objc func tapped() { _ = accessibilityActivate() }
@@ -71,14 +66,6 @@ final class Bubble: UIView {
     func toggle(_ open: Bool) {
         self.open = open
         UIView.animate(springDuration: 0.35, bounce: 0.2) { self.update() }
-    }
-
-    /// Opens the next step: the hint after the nudge, then the answer.
-    func step() {
-        guard var note, !note.finished else { return }
-        note.stage += 1
-        self.note = note
-        opened(note)
     }
 
     func update() {
@@ -95,9 +82,7 @@ final class Bubble: UIView {
             orb.frame = bounds
             return
         }
-        label.text = note.shown
-        more.isHidden = note.finished
-        more.configuration?.title = note.stage < note.steps.count - 1 ? "hint ›" : "answer ›"
+        label.text = note.reply
         let textWidth = Self.width - 28
         let height = label.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude)).height
         bounds = CGRect(x: 0, y: 0, width: Self.width, height: height + 58)
@@ -106,7 +91,6 @@ final class Bubble: UIView {
         let row = height + 20
         trash.frame = CGRect(x: Self.width - 42, y: row, width: 36, height: 32)
         close.frame = CGRect(x: Self.width - 78, y: row, width: 36, height: 32)
-        more.frame = CGRect(x: 4, y: row, width: 110, height: 32)
     }
 
     /// Sits at its anchor and scales with the page since its mark was made; text stays sharp up to 3× that.

@@ -12,7 +12,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Two-finger tap undo, three-finger tap redo, Pencil double-tap swaps pen and eraser
 - [x] Muse Spark 1.3 client (Responses API: text and PNG input, low reasoning effort by default)
 - [x] Marks: 0.6 s after the pen rests, Jev reads the gesture the new ink makes; a `?` or an empty box wakes Muse, and so does a double dot, which the iPad reads from its timing. Jev's verdict shows in the top-right corner for 3 s ("question 97%", "maybe frame 62%")
-- [x] Answers: quiet dots that open into glass bubbles; a `?` opens a nudge, then a hint, then the answer; saved with the page. While Muse answers, the dot is an opal thinking orb
+- [x] Answers: a `?` gets a quiet dot that opens into a glass bubble when tapped; a double dot's answer opens at once; saved with the page. While Muse answers, the dot is an opal thinking orb
 - [x] App icon: a pencil scribble that straightens into a glowing arrow, a rough thought the AI turns into a direction
 - [x] Empty box: Muse draws in it with the agent's blue pen: a line drawing with pen-font labels, or a graph the app plots itself; one undo takes it away. While it's drawn, a grey pixel grid shimmers in the box
 - [ ] Shared memory the agents read and propose changes to
@@ -37,7 +37,7 @@ MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]   # Jev reads a 
 
 `checks/pipeline-check.swift` runs on an iPad simulator. It writes "x² = 49 ?", and "triangle" with an empty box under it, as PencilKit strokes and sends them through the app's own grouping, red crops, Jev, Muse and agent pen. Its header has the commands. 29 Oct: the ? was answered in 4.6 s; the box was read and filled with a triangle in 7.0 s.
 
-28 Oct, low effort: reading "2 + 2 = ?" took 1.9–2.3 s and about 100–200 output tokens (at the API's default high effort, "say hi" took 678). The agent read "x² = 49 ?" as a question with a nudge, a hint and "x = 7 or x = -7" in 2.6 s, left plain writing alone in 2.3 s, and explained a double-dotted word in 3.9 s. 29 Oct, with Jev in front: Jev named a ? in 0.21 s and plain writing in 0.13 s; Muse answered the ? in 4.0 s in all, drew a labelled water cycle in 24 s and plotted y = x^2 - 4 in 4.0 s (drawing runs at medium effort).
+28 Oct, low effort: reading "2 + 2 = ?" took 1.9–2.3 s and about 100–200 output tokens (at the API's default high effort, "say hi" took 678). The agent read "x² = 49 ?" as a question and answered "x = 7 or x = -7" in 2.6 s, left plain writing alone in 2.3 s, and explained a double-dotted word in 3.9 s. 29 Oct, with Jev in front: Jev named a ? in 0.21 s and plain writing in 0.13 s; Muse answered the ? in 4.0 s in all (2.5 s once answers dropped the nudge and hint), drew a labelled water cycle in 24 s and plotted y = x^2 - 4 in 4.0 s (drawing runs at medium effort).
 
 ## Run it
 

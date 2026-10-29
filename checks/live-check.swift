@@ -48,7 +48,7 @@ struct Check {
         precondition(questionMark == "question", "Jev sees the ?: \(questionMark)")
         let question = try await agent.ask(near: questionNear, around: picture([("x² = 49 ", false), ("?", true)]), gesture: "question", threads: [], target: nil)
         print("question: Jev \(jevMs), then \(question) in \(start.duration(to: .now))")
-        precondition(question.reply.contains("7") && question.steps.count == 2, "a written ? is answered, with a nudge and a hint")
+        precondition(question.reply.contains("7"), "a written ? is answered")
 
         start = .now
         let writing = try await jev.mark(picture([("the cell ", false), ("wall", true)])).mark
@@ -58,7 +58,7 @@ struct Check {
         start = .now
         let dots = try await agent.ask(near: picture([("mitochondria", false)]), around: picture([("mitochondria", false)]), gesture: "double_dot", threads: [], target: nil)
         print("double dot: \(dots) in \(start.duration(to: .now))")
-        precondition(!dots.reply.isEmpty && dots.steps.isEmpty, "a double dot is answered")
+        precondition(!dots.reply.isEmpty, "a double dot is answered")
 
         let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : NSTemporaryDirectory())
         let font = Hershey(try String(contentsOfFile: "Maple/futural.jhf", encoding: .ascii))

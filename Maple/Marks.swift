@@ -76,7 +76,7 @@ final class Marks {
         let visible = CGRect(x: canvas.contentOffset.x / zoom, y: canvas.contentOffset.y / zoom,
                              width: canvas.bounds.width / zoom, height: canvas.bounds.height / zoom)
         let around = visible.union(near)
-        let threads = notes.filter { around.contains($0.anchor) }.map { Agent.Thread(id: $0.id, reading: $0.reading, shown: $0.shown) }
+        let threads = notes.filter { around.contains($0.anchor) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
         let target = notes.filter { mark.insetBy(dx: -60 / zoom, dy: -60 / zoom).contains($0.anchor) }
             .min { hypot($0.anchor.x - mark.midX, $0.anchor.y - mark.midY) < hypot($1.anchor.x - mark.midX, $1.anchor.y - mark.midY) }?.id
         // A double dot is known on the device, so its orb shows at once. Anything else, Jev looks at first, and only a ? or
@@ -138,7 +138,7 @@ final class Marks {
         bubbles.removeAll { $0 === bubble }
     }
 
-    /// Answers a ? (as a quiet dot, with a nudge and a hint first) or a double dot. The dot is the thinking orb meanwhile.
+    /// Answers a ? as a quiet dot to tap open, or a double dot, opened at once. The dot is the thinking orb meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?,
              trigger: [String], mark: CGRect, zoom: CGFloat, bubble: Bubble?) async {
         guard present(trigger) else { return remove(bubble) }
@@ -150,10 +150,13 @@ final class Marks {
             logger.notice("answered gesture=\(gesture, privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
             let note = Note(mark: gesture, trigger: trigger, anchor: Self.anchor(mark, zoom), zoom: zoom, reading: answer.reading,
-                            reply: answer.reply, steps: gesture == "question" ? Array(answer.steps.prefix(2)) : [])
+                            reply: answer.reply)
             notes.append(note)
             save()
-            if let bubble { bubble.note = note } else { add(Bubble(anchor: note.anchor, zoom: zoom, note: note)) }
+            // A ? stays a quiet dot until it's tapped; a double dot asked to be shown now.
+            let shown = bubble ?? add(Bubble(anchor: note.anchor, zoom: zoom))
+            shown.note = note
+            if gesture == "double_dot" { shown.toggle(true) }
         } catch {
             logger.error("ask failed: \(error.localizedDescription, privacy: .public)")
             bubble?.retry = { [weak self, weak bubble] in
@@ -195,7 +198,7 @@ final class Marks {
             var after = before
             after.strokes += strokes
             place(after, note: Note(mark: "frame", trigger: trigger, anchor: Self.anchor(box, zoom), zoom: zoom, reading: drawing.reading,
-                                    reply: drawing.say, steps: []), replacing: before)
+                                    reply: drawing.say), replacing: before)
         } catch {
             logger.error("draw failed: \(error.localizedDescription, privacy: .public)")
             let failed = add(Bubble(anchor: Self.anchor(box, zoom), zoom: zoom))
@@ -238,11 +241,6 @@ final class Marks {
     }
 
     @discardableResult func add(_ bubble: Bubble) -> Bubble {
-        bubble.opened = { [weak self] note in
-            guard let self, let i = notes.firstIndex(where: { $0.id == note.id }) else { return }
-            notes[i] = note
-            save()
-        }
         bubble.deleted = { [weak self, weak bubble] in
             guard let self, let bubble else { return }
             notes.removeAll { $0.id == bubble.note?.id }
