@@ -34,7 +34,8 @@ struct Check {
         let canvas = controller.canvas, pivot = CGPoint(x: 190, y: 730)
         let anchor = CGPoint(x: 2000, y: 3000)
         let note = Note(mark: "question", trigger: [], anchor: anchor, zoom: 1.5, reading: "test", reply: "test")
-        controller.marks.apply(.init(add: [AgentPen.stroke([anchor, CGPoint(x: 2100, y: 3000)], width: 3, step: 2)], notes: [note]))
+        let drawn = AgentPen.stroke([anchor, CGPoint(x: 2100, y: 3000)], width: 3, step: 2)
+        controller.marks.apply(.init(add: [drawn], notes: [note]))
         let bubble = controller.marks.add(Bubble(anchor: anchor, zoom: 1.5, turn: 0, note: note))
         let ink = canvas.drawing.dataRepresentation()
         let twist = Rotation()
@@ -79,6 +80,7 @@ struct Check {
         // Maple's ink stays Maple's after a reload, though PencilKit reads it back as another ink type.
         let reread = reopened.canvas.drawing.strokes
         precondition(reread.count == 1 && AgentPen.wrote(reread[0]) && !AgentPen.person(reread[0]), "agent ink survives a reload")
+        precondition(Marks.id(reread[0]) == Marks.id(drawn), "a stroke keeps its id and date through a reload")
         let older = PKInk(.pen, color: UIColor(red: 0x2F / 255, green: 0x5D / 255, blue: 0xB8 / 255, alpha: 1))
         precondition(AgentPen.wrote(PKStroke(ink: older, path: reread[0].path)), "pages from before the darker blue")
         let mine = PKStroke(ink: controller.pen.ink, path: reread[0].path)
@@ -120,6 +122,49 @@ struct Check {
         precondition(!ids().contains(Marks.id(queued)), "waits for the pen to rest")
         try await Task.sleep(for: .milliseconds(800))
         precondition(ids().contains(Marks.id(queued)), "written once the pen rested")
+
+        // Writing over an answer fades it where it is; it comes back once that writing is gone. Scratching it out takes it
+        // and the scratching away as one step of undo, and erasing it takes it from VoiceOver.
+        let date = Date()
+        var answer = Note(mark: "question", trigger: [], anchor: CGPoint(x: 2000, y: 3600), zoom: 2, reading: "", reply: "seven")
+        (answer.inked, answer.rect, answer.turn) = (date, CGRect(x: 2000, y: 3600, width: 60, height: 20), 0)
+        let written = [3600, 3610, 3620].map { AgentPen.stroke([CGPoint(x: 2000, y: $0), CGPoint(x: 2060, y: $0)], width: 3, step: 2, date: date) }
+        func red(_ stroke: PKStroke) -> CGFloat {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            stroke.ink.color.getRed(&r, green: &g, blue: &b, alpha: &a)
+            return r
+        }
+        func reads() -> Bool { marks.written.contains { $0.note.id == answer.id } }
+        event()
+        marks.apply(.init(add: written, notes: [answer]))
+        event()
+        precondition(Set(written.map(Marks.id)).count == written.count && reads(), "an answer's strokes each have their own id")
+        let over = PKStroke(ink: controller.pen.ink, path: line(3610).path)
+        canvas.drawing.strokes.append(over)
+        let order = ids()
+        marks.fadedBy[answer.id] = [Marks.id(over)]
+        marks.fade(answer, false)
+        marks.flush()
+        precondition(ids() == order && marks.strokes(of: answer).count == 3 && marks.strokes(of: answer).allSatisfy { red($0) > 0.7 },
+                     "faded in place, under the writing")
+        canvas.drawing.strokes.removeAll { Marks.id($0) == Marks.id(over) }
+        marks.flush()
+        precondition(marks.strokes(of: answer).allSatisfy { red($0) < 0.2 } && marks.fadedBy.isEmpty, "back once the writing is gone")
+        let scribble = PKStroke(ink: controller.pen.ink, path: line(3612).path)
+        canvas.drawing.strokes.append(scribble)
+        let kept = Set(ids())
+        event()
+        marks.scratch(answer, [Marks.id(scribble)])
+        marks.flush()
+        precondition(kept.subtracting(ids()) == Set(written.map(Marks.id) + [Marks.id(scribble)]) && !reads()
+                     && !marks.notes.contains { $0.id == answer.id }, "scratched out")
+        event()
+        controller.undo()
+        precondition(Set(ids()) == kept && reads(), "undo brings the answer and the scratching back")
+        marks.penDown()
+        marks.penUp(writing: false)
+        canvas.drawing.strokes.removeAll { written.map(Marks.id).contains(Marks.id($0)) }
+        precondition(!reads(), "an erased answer leaves VoiceOver")
         let last = line(3500)
         marks.penDown()
         marks.enqueue { .init(add: [last]) }
@@ -143,7 +188,7 @@ struct Check {
         let turned = controller.marks.add(Bubble(anchor: CGPoint(x: 2000, y: 3000), zoom: 2, turn: turn))
         let c = turned.convert(CGPoint.zero, to: controller.view), d = turned.convert(CGPoint(x: 20, y: 0), to: controller.view)
         precondition(abs(c.y - d.y) < 0.5, "a bubble reads level on screen")
-        print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, reading frame")
+        print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame")
     }
 
     static func near(_ a: CGPoint, _ b: CGPoint) {

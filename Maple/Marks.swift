@@ -45,6 +45,8 @@ final class Marks {
     var settling: Task<Void, Never>?
     var pending: [(since: ContinuousClock.Instant, change: () -> Change?)] = []
     var flushing: Task<Void, Never>?
+    var erasing = false
+    var fadedBy: [String: Set<String>] = [:]  // answers faded under the person's writing, and the strokes that faded them
 
     /// One step of Maple's own changes, made by stroke and note id, so undoing it never reverts anything else on the page.
     struct Change {
@@ -52,6 +54,7 @@ final class Marks {
         var remove: Set<String> = []
         var notes: [Note] = []
         var dropping: Set<String> = []
+        var undoable = true  // false for fading, which isn't the person's to undo
         var landed: () -> Void = {}  // runs once it's on the page
     }
 
@@ -74,6 +77,7 @@ final class Marks {
     /// The pen left the page; `writing` when it was inking, so there may be a mark to read.
     func penUp(writing: Bool) {
         penOn = false
+        erasing = !writing
         settling = Task {
             try? await Task.sleep(for: Self.landing)
             if !Task.isCancelled { settle() }
@@ -85,13 +89,23 @@ final class Marks {
         }
     }
 
-    /// The drawing changed; after the pen lifts, that's its stroke landing.
-    func drawingChanged() { if busy, !penOn { settle() } }
+    /// The drawing changed; after the pen lifts, that's its stroke landing. A faded answer comes back once the writing
+    /// over it is gone.
+    func drawingChanged() {
+        if busy, !penOn { settle() }
+        guard !fadedBy.isEmpty else { return }
+        let present = Set(canvas.drawing.strokes.map(Self.id))
+        for (id, strokes) in fadedBy where present.isDisjoint(with: strokes) {
+            fadedBy[id] = nil
+            if let note = notes.first(where: { $0.id == id }) { fade(note, true) }
+        }
+    }
 
     func settle() {
         settling?.cancel()
         busy = false
         lastInk = .now
+        if erasing { sync() }  // an answer erased away leaves VoiceOver too
         schedule()
     }
 
@@ -140,18 +154,25 @@ final class Marks {
         }
     }
 
-    /// Makes one step of Maple's changes to the page, undone and redone on its own.
+    /// Makes one step of Maple's changes to the page, undone and redone on its own. A stroke both removed and added is
+    /// changed in place, so it keeps its depth among the person's strokes.
     func apply(_ change: Change) {
-        var drawing = canvas.drawing
-        let removed = drawing.strokes.filter { change.remove.contains(Self.id($0)) }
-        drawing.strokes.removeAll { change.remove.contains(Self.id($0)) }
-        drawing.strokes += change.add
+        var drawing = canvas.drawing, removed: [PKStroke] = []
+        var adding = Dictionary(change.add.map { (Self.id($0), $0) }) { first, _ in first }
+        drawing.strokes = drawing.strokes.compactMap { stroke in
+            let id = Self.id(stroke)
+            guard change.remove.contains(id) else { return stroke }
+            removed.append(stroke)
+            return adding.removeValue(forKey: id)
+        }
+        drawing.strokes += change.add.filter { adding[Self.id($0)] != nil }
         let dropped = notes.filter { change.dropping.contains($0.id) }
         notes.removeAll { change.dropping.contains($0.id) }
         notes += change.notes
         canvas.drawing = drawing
         save()
         sync()
+        guard change.undoable else { return }
         canvas.undoManager?.registerUndo(withTarget: self) {
             $0.apply(Change(add: removed, remove: Set(change.add.map(Self.id)), notes: dropped, dropping: Set(change.notes.map(\.id))))
         }
@@ -238,13 +259,14 @@ final class Marks {
         run { [self] in
             let (nearPNG, aroundPNG) = await Self.crops(marked.transformed(using: reading), near, around)
             guard !Task.isCancelled else { return }
-            var gesture = "double_dot"
+            var gesture = "double_dot", sure = true
             if dots == nil {
                 guard let jev else { return }
                 let start = ContinuousClock.now
                 do {
                     let verdict = try await jev.mark(nearPNG)
                     gesture = verdict.mark
+                    sure = verdict.top == verdict.mark
                     tag(verdict)
                 } catch {
                     return logger.error("jev failed: \(error.localizedDescription, privacy: .public)")
@@ -260,7 +282,14 @@ final class Marks {
                           turn: turn, zoom: zoom, view: view, bubble: thinking)
             case "frame":
                 await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, turn: turn, zoom: zoom)
-            default: break  // writing, circles, underlines and the rest are the person's own; nothing wakes
+            case "scribble", "strike":  // scratching out an answer or a drawing removes it
+                if let note = answer(touching: trigger) { scratch(note, trigger) }
+            case "writing" where sure, "other" where sure:  // writing over an answer fades it under the writing
+                if let note = answer(touching: trigger), note.mark != "frame" {
+                    fadedBy[note.id, default: []].formUnion(trigger)
+                    fade(note, false)
+                }
+            default: break  // circles, underlines and the rest are the person's own; nothing wakes
             }
         }
     }
@@ -389,9 +418,62 @@ final class Marks {
         return end.location.applying(last.transform)
     }
 
+    /// Maple's strokes for an answer or a drawing.
+    func strokes(of note: Note) -> [PKStroke] {
+        canvas.drawing.strokes.filter { AgentPen.wrote($0) && $0.path.creationDate == note.inked }
+    }
+
+    /// The answer or drawing the strokes `ids` come within a few screen points of, by the ink itself, not its box.
+    func answer(touching ids: [String]) -> Note? {
+        let marked = canvas.drawing.strokes.filter { ids.contains(Self.id($0)) }
+        return notes.first { note in
+            guard note.inked != nil else { return false }
+            let reach = 4 / note.zoom, ink = strokes(of: note).flatMap { Self.points($0, every: reach).joined() }
+            return Self.touches(marked.flatMap { Self.points($0, every: reach).joined() }, ink, within: reach)
+        }
+    }
+
+    /// Whether any of `points` comes within `reach` of `ink`.
+    static func touches(_ points: [CGPoint], _ ink: [CGPoint], within reach: CGFloat) -> Bool {
+        struct Cell: Hashable { var x, y: Int }
+        func cell(_ p: CGPoint) -> Cell { Cell(x: Int((p.x / reach).rounded(.down)), y: Int((p.y / reach).rounded(.down))) }
+        var near: [Cell: [CGPoint]] = [:]
+        for p in ink { near[cell(p), default: []].append(p) }
+        return points.contains { p in
+            let c = cell(p)
+            return (-1...1).contains { dx in
+                (-1...1).contains { dy in near[Cell(x: c.x + dx, y: c.y + dy)]?.contains { hypot($0.x - p.x, $0.y - p.y) <= reach } ?? false }
+            }
+        }
+    }
+
+    /// Fades an answer toward the paper, or brings it back. A partly erased answer is the person's to change, so it stays.
+    func fade(_ note: Note, _ back: Bool) {
+        enqueue { [weak self] in
+            guard let self else { return nil }
+            let mine = strokes(of: note)
+            guard !mine.isEmpty, !mine.contains(where: { $0.mask != nil }) else { return nil }
+            let recoloured = mine.map { stroke in
+                var stroke = stroke
+                stroke.ink.color = back ? AgentPen.blue : AgentPen.faded
+                return stroke
+            }
+            return Change(add: recoloured, remove: Set(mine.map(Self.id)), undoable: false)
+        }
+    }
+
+    /// Takes away an answer or drawing the person scratched out, and the scratching, as one step of undo.
+    func scratch(_ note: Note, _ trigger: [String]) {
+        enqueue { [weak self] in
+            guard let self else { return nil }
+            return Change(remove: Set(strokes(of: note).map(Self.id) + trigger), dropping: [note.id])
+        }
+    }
+
     /// Keeps a view over each answer written in ink, for VoiceOver and its reveal, as notes come and go with undo.
     func sync() {
-        let inked = notes.filter { $0.mark != "frame" && $0.inked != nil }
+        let alive = Set(canvas.drawing.strokes.lazy.filter(AgentPen.wrote).map(\.path.creationDate))
+        let inked = notes.filter { $0.mark != "frame" && $0.inked.map(alive.contains) == true }
         written.removeAll { view in
             guard !inked.contains(where: { $0.id == view.note.id }) else { return false }
             view.removeFromSuperview()

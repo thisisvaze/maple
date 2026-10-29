@@ -9,8 +9,12 @@ enum AgentPen {
     static let blue = UIColor(red: 0x1F / 255, green: 0x45 / 255, blue: 0x96 / 255, alpha: 1)
     static let ink = PKInk(.monoline, color: blue)
 
-    /// The blues Maple has written in: today's, and the lighter #2F5DB8 of pages made before 29 Oct.
-    static let blues: [SIMD3<Double>] = [[0x1F, 0x45, 0x96], [0x2F, 0x5D, 0xB8]].map { $0 / 255 }
+    /// Today's blue mixed 70% toward the light paper: an answer faded under the person's writing. PencilKit's dark-mode
+    /// conversion keeps it faint on the dark paper too.
+    static let faded = UIColor(red: 0xB9 / 255, green: 0xC4 / 255, blue: 0xDC / 255, alpha: 1)
+
+    /// The blues Maple has written in: today's, the lighter #2F5DB8 of pages made before 29 Oct, and today's faded.
+    static let blues: [SIMD3<Double>] = [[0x1F, 0x45, 0x96], [0x2F, 0x5D, 0xB8], [0xB9, 0xC4, 0xDC]].map { $0 / 255 }
 
     static func wrote(_ stroke: PKStroke) -> Bool {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
