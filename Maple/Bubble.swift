@@ -2,11 +2,13 @@ import UIKit
 
 /// An answer beside its mark: a quiet dot that opens into a glass bubble. While Muse answers, the dot is the thinking
 /// orb; it turns orange if asking failed, and a tap tries again.
-/// It lives in the canvas's content, top-left at `anchor`, and grows and shrinks with the page like ink.
+/// It lives in the canvas's content, top-left at `anchor`, and grows and shrinks with the page like ink. It reads level in
+/// the frame its mark was written in, the page turned by `turn`.
 final class Bubble: UIView {
     static let width: CGFloat = 300
     let anchor: CGPoint
     let zoom: CGFloat  // the page's zoom when its mark was made
+    let turn: CGFloat
     var note: Note? { didSet { update() } }  // nil while Muse is reading
     var retry: (() -> Void)? { didSet { update() } }
     var deleted: () -> Void = {}
@@ -19,9 +21,10 @@ final class Bubble: UIView {
     let close = UIButton(configuration: .plain())
     let trash = UIButton(configuration: .plain())
 
-    init(anchor: CGPoint, zoom: CGFloat, note: Note? = nil) {
+    init(anchor: CGPoint, zoom: CGFloat, turn: CGFloat, note: Note? = nil) {
         self.anchor = anchor
         self.zoom = zoom
+        self.turn = turn
         self.note = note
         super.init(frame: .zero)
         layer.anchorPoint = .zero  // `center` is then the top-left, so it can sit at the anchor
@@ -96,7 +99,7 @@ final class Bubble: UIView {
     /// Sits at its anchor and scales with the page since its mark was made; text stays sharp up to 3× that.
     func place(zoom current: CGFloat) {
         let scale = current / zoom
-        transform = CGAffineTransform(scaleX: scale, y: scale)
+        transform = CGAffineTransform(rotationAngle: -turn).scaledBy(x: scale, y: scale)
         center = CGPoint(x: anchor.x * current, y: anchor.y * current)
         label.contentScaleFactor = traitCollection.displayScale * min(max(scale, 1), 3)
         orb.contentScaleFactor = label.contentScaleFactor

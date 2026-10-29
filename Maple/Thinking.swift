@@ -139,12 +139,13 @@ final class Thinking: UIView {
         setNeedsDisplay()
     }
 
-    /// Sits over `box` on the page and scales with it, staying sharp up to 3×.
-    func place(over box: CGRect, zoom: CGFloat) {
+    /// Sits over `box`, a rect in the page turned by `turn`, and scales with the page, staying sharp up to 3×.
+    func place(over box: CGRect, turn: CGFloat, zoom: CGFloat) {
         layer.anchorPoint = .zero
         bounds = CGRect(origin: .zero, size: box.size)
-        transform = CGAffineTransform(scaleX: zoom, y: zoom)
-        center = CGPoint(x: box.minX * zoom, y: box.minY * zoom)
+        transform = CGAffineTransform(rotationAngle: -turn).scaledBy(x: zoom, y: zoom)
+        let corner = box.origin.applying(CGAffineTransform(rotationAngle: -turn))
+        center = CGPoint(x: corner.x * zoom, y: corner.y * zoom)
         contentScaleFactor = traitCollection.displayScale * min(max(zoom, 1), 3)
     }
 

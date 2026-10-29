@@ -189,10 +189,11 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { marks.penDown() }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-        if canvas.tool is PKInkingTool { marks.penUp() }  // erasing isn't a mark
+        marks.penUp(writing: canvas.tool is PKInkingTool)  // erasing isn't a mark
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+        marks.drawingChanged()
         dirty = true
         saveTask?.cancel()
         saveTask = Task {
@@ -219,6 +220,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     @objc func saveNow() {
+        marks.flush()  // what Maple was waiting to write goes in now
         saveTask?.cancel()
         save()
         Store.queue.sync {}

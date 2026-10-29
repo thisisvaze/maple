@@ -2,13 +2,13 @@ import CoreGraphics
 import Foundation
 
 /// What the agent draws in an empty box, in the box's own points: x rightward, y downward, from its top-left.
-nonisolated struct Drawing: Decodable, Sendable {
-    struct Label: Decodable, Sendable {
+nonisolated struct Drawing: Codable, Sendable {
+    struct Label: Codable, Sendable {
         var text: String
         var x, y, size: CGFloat  // top-left of the text; size is the capital height
     }
 
-    struct Graph: Decodable, Sendable {
+    struct Graph: Codable, Sendable {
         var expression: String
         var xMin, xMax, yMin, yMax: Double
     }

@@ -3,13 +3,18 @@ import os
 
 nonisolated let logger = Logger(subsystem: "dev.maple", category: "marks")
 
-/// After each pen pause, finds the mark just made, asks the agent about it, and keeps the answers as bubbles on the page.
+/// After each pen pause, finds the mark just made, asks the agent about it, and keeps its answers on the page. Marks are
+/// measured in the reading frame, the page turned the way it lies on screen, so writing that runs level on screen is level
+/// there at any page angle.
 final class Marks {
     // Calibration knobs: tune with a real Pencil.
     static let pause: Duration = .milliseconds(600)  // how long the pen rests before a mark is read
     static let doubleDotReach: CGFloat = 4  // screen points two nib taps may land apart and still be one double dot
     static let nearPad: CGFloat = 90  // page points of context around the mark in the close-up
     static let maxAsking = 3  // questions in flight at once; more pauses wait for the next one
+    static let rest: Duration = .milliseconds(800)  // how long the pen rests before Maple writes on the page
+    static let restCap: Duration = .seconds(6)  // past this, Maple writes in the next gap between strokes
+    static let landing: Duration = .milliseconds(300)  // the longest a finished stroke takes to reach the drawing
 
     /// The agent's blue for dots, bubbles and their text: the ink's blue, and in dark mode the colour PencilKit draws it in.
     static let ink = UIColor { $0.userInterfaceStyle == .dark
@@ -22,42 +27,170 @@ final class Marks {
     let jev = Jev.bundled
     var notes: [Note]
     var bubbles: [Bubble] = []
-    var grids: [(view: Thinking, box: CGRect)] = []  // over boxes being drawn in
+    var grids: [(view: Thinking, box: CGRect, turn: CGFloat)] = []  // over boxes being drawn in
     var waiting: Task<Void, Never>?
     var lastTrigger: [String] = []
     var asking = 0
     weak var lastTag: UILabel?
+    var work: [UUID: Task<Void, Never>] = [:]  // reading and answering in flight, cancelled when the page closes
+    var closed = false
+
+    // Maple writes on the page only while the pen rests: a finished stroke can take a moment to reach the drawing, and
+    // setting the drawing under a live stroke can cut it short.
+    var penOn = false
+    var busy = false  // the pen is on the page, or its last stroke hasn't landed yet
+    var lastInk = ContinuousClock.now
+    var settling: Task<Void, Never>?
+    var pending: [(since: ContinuousClock.Instant, change: () -> Change?)] = []
+    var flushing: Task<Void, Never>?
+
+    /// One step of Maple's own changes, made by stroke and note id, so undoing it never reverts anything else on the page.
+    struct Change {
+        var add: [PKStroke] = []
+        var remove: Set<String> = []
+        var notes: [Note] = []
+        var dropping: Set<String> = []
+    }
 
     init(canvas: PKCanvasView, page: Page, notes: [Note]) {
         self.canvas = canvas
         self.page = page
         self.notes = notes
-        notes.filter { $0.mark != "frame" }.forEach { add(Bubble(anchor: $0.anchor, zoom: $0.zoom, note: $0)) }  // a drawing is its own ink
+        notes.filter { $0.mark != "frame" }.forEach { add(Bubble(anchor: $0.anchor, zoom: $0.zoom, turn: $0.turn ?? 0, note: $0)) }  // a drawing is its own ink
         if agent == nil { logger.error("No MODEL_API_KEY in Secrets.xcconfig: marks are off") }
         if jev == nil { logger.error("No TYPESAFE_API_KEY in Secrets.xcconfig: only double dots are read") }
     }
 
-    func penDown() { waiting?.cancel() }
+    func penDown() {
+        penOn = true
+        busy = true
+        [waiting, settling, flushing].forEach { $0?.cancel() }
+    }
 
-    func penUp() {
-        waiting?.cancel()
+    /// The pen left the page; `writing` when it was inking, so there may be a mark to read.
+    func penUp(writing: Bool) {
+        penOn = false
+        settling = Task {
+            try? await Task.sleep(for: Self.landing)
+            if !Task.isCancelled { settle() }
+        }
+        guard writing, !closed else { return }
         waiting = Task {
             try? await Task.sleep(for: Self.pause)
             if !Task.isCancelled { look() }
         }
     }
 
-    func stop() { waiting?.cancel() }
+    /// The drawing changed; after the pen lifts, that's its stroke landing.
+    func drawingChanged() { if busy, !penOn { settle() } }
+
+    func settle() {
+        settling?.cancel()
+        busy = false
+        lastInk = .now
+        schedule()
+    }
+
+    /// Writes everything queued, cancels what's in flight, and stops writing to the page, which is closing.
+    func stop() {
+        flush()
+        closed = true
+        [waiting, settling, flushing].forEach { $0?.cancel() }
+        work.values.forEach { $0.cancel() }
+    }
+
+    /// Starts reading or answering, cancelled if the page closes first.
+    func run(_ body: @escaping () async -> Void) {
+        let key = UUID()
+        work[key] = Task {
+            await body()
+            work[key] = nil
+        }
+    }
+
+    /// Queues a change for when the pen rests. It's worked out then, against the page as it is, and dropped if it returns nil.
+    func enqueue(_ change: @escaping () -> Change?) {
+        pending.append((.now, change))
+        schedule()
+    }
+
+    func schedule() {
+        flushing?.cancel()
+        guard let first = pending.first, !busy, !closed else { return }
+        let due = min(lastInk + Self.rest, first.since + Self.restCap)
+        flushing = Task {
+            try? await Task.sleep(until: due)
+            if !Task.isCancelled { flush() }
+        }
+    }
+
+    /// Writes the queued changes now.
+    func flush() {
+        flushing?.cancel()
+        let queued = pending
+        pending = []
+        for item in queued { if let change = item.change() { apply(change) } }
+    }
+
+    /// Makes one step of Maple's changes to the page, undone and redone on its own.
+    func apply(_ change: Change) {
+        var drawing = canvas.drawing
+        let removed = drawing.strokes.filter { change.remove.contains(Self.id($0)) }
+        drawing.strokes.removeAll { change.remove.contains(Self.id($0)) }
+        drawing.strokes += change.add
+        let dropped = notes.filter { change.dropping.contains($0.id) }
+        notes.removeAll { change.dropping.contains($0.id) }
+        notes += change.notes
+        canvas.drawing = drawing
+        save()
+        canvas.undoManager?.registerUndo(withTarget: self) {
+            $0.apply(Change(add: removed, remove: Set(change.add.map(Self.id)), notes: dropped, dropping: Set(change.notes.map(\.id))))
+        }
+    }
 
     static func id(_ stroke: PKStroke) -> String { "\(stroke.path.creationDate.timeIntervalSince1970)-\(stroke.randomSeed)" }
 
+    /// A stroke's visible ink, a point every `step` page points along each part the eraser left, transform applied.
+    static func points(_ stroke: PKStroke, every step: CGFloat) -> [[CGPoint]] {
+        stroke.maskedPathRanges.map { range in
+            stroke.path.interpolatedPoints(in: range, by: .distance(step)).map { $0.location.applying(stroke.transform) }
+        }
+    }
+
+    /// A stroke's box in the page turned by `turn`, as wide as its ink; null if it was erased.
+    static func bounds(_ stroke: PKStroke, turn: CGFloat, zoom: CGFloat) -> CGRect {
+        let frame = CGAffineTransform(rotationAngle: turn), half = (stroke.path.first?.size.width ?? 0) / 2
+        let box = points(stroke, every: 1 / zoom).joined().reduce(CGRect.null) { $0.union(CGRect(origin: $1.applying(frame), size: .zero)) }
+        return box.isNull ? box : box.insetBy(dx: -half, dy: -half)
+    }
+
+    /// The screen's corners in page points, clockwise from the top-left.
+    var screen: [CGPoint] {
+        guard let view = canvas.superview else { return [] }
+        let b = view.bounds, zoom = canvas.zoomScale
+        return [CGPoint(x: b.minX, y: b.minY), CGPoint(x: b.maxX, y: b.minY), CGPoint(x: b.maxX, y: b.maxY), CGPoint(x: b.minX, y: b.maxY)].map {
+            let p = canvas.convert($0, from: view)
+            return CGPoint(x: p.x / zoom, y: p.y / zoom)
+        }
+    }
+
+    /// How far a page point is from an answer: from its written block or box, or from its dot.
+    static func distance(_ point: CGPoint, _ note: Note) -> CGFloat {
+        guard let rect = note.rect, let turn = note.turn else { return hypot(point.x - note.anchor.x, point.y - note.anchor.y) }
+        let q = point.applying(CGAffineTransform(rotationAngle: turn))
+        return hypot(max(rect.minX - q.x, 0, q.x - rect.maxX), max(rect.minY - q.y, 0, q.y - rect.maxY))
+    }
+
     /// Reads the latest strokes for a mark and, if they're new, asks about them.
     func look() {
-        guard let agent, asking < Self.maxAsking else { return }
+        guard let agent, asking < Self.maxAsking, !closed else { return }
         let drawing = canvas.drawing, zoom = canvas.zoomScale
-        let recent = drawing.strokes.filter(AgentPen.person).suffix(12).map { stroke in
+        let turn = atan2(canvas.transform.b, canvas.transform.a), reading = CGAffineTransform(rotationAngle: turn)
+        let recent = drawing.strokes.filter(AgentPen.person).suffix(12).compactMap { stroke -> Grouping.Stroke? in
+            let bounds = Self.bounds(stroke, turn: turn, zoom: zoom)
             let started = stroke.path.creationDate.timeIntervalSince1970
-            return Grouping.Stroke(id: Self.id(stroke), bounds: stroke.renderBounds, started: started, ended: started + (stroke.path.last?.timeOffset ?? 0))
+            return bounds.isNull ? nil : Grouping.Stroke(id: Self.id(stroke), bounds: bounds, started: started,
+                                                         ended: started + (stroke.path.last?.timeOffset ?? 0))
         }
         let dots = Grouping.doubleDot(recent, reach: Self.doubleDotReach / zoom)
         let trigger = dots ?? Grouping.candidate(recent)
@@ -71,20 +204,21 @@ final class Marks {
             if selected.contains(Self.id(stroke)) { stroke.ink = PKInk(stroke.ink.inkType, color: .systemRed) }
             return stroke
         }
-        let mark = marked.strokes.filter { selected.contains(Self.id($0)) }.reduce(CGRect.null) { $0.union($1.renderBounds) }
+        // In the reading frame: the mark, a close-up around it, and the screen with the close-up.
+        let mark = recent.filter { selected.contains($0.id) }.reduce(CGRect.null) { $0.union($1.bounds) }
         let side = max(mark.width, mark.height) + 2 * Self.nearPad
         let near = CGRect(x: mark.midX - side / 2, y: mark.midY - side / 2, width: side, height: side)
-        let visible = CGRect(x: canvas.contentOffset.x / zoom, y: canvas.contentOffset.y / zoom,
-                             width: canvas.bounds.width / zoom, height: canvas.bounds.height / zoom)
-        let around = visible.union(near)
-        let threads = notes.filter { around.contains($0.anchor) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
-        let target = notes.filter { mark.insetBy(dx: -60 / zoom, dy: -60 / zoom).contains($0.anchor) }
-            .min { hypot($0.anchor.x - mark.midX, $0.anchor.y - mark.midY) < hypot($1.anchor.x - mark.midX, $1.anchor.y - mark.midY) }?.id
+        let around = screen.reduce(near) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
+        let threads = notes.filter { around.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
+        let middle = CGPoint(x: mark.midX, y: mark.midY).applying(reading.inverted()), reach = max(mark.width, mark.height) / 2 + 60 / zoom
+        let target = notes.filter { Self.distance(middle, $0) <= reach }.min { Self.distance(middle, $0) < Self.distance(middle, $1) }?.id
+        let anchor = Self.anchor(mark, zoom).applying(reading.inverted())
         // A double dot is known on the device, so its orb shows at once. Anything else, Jev looks at first, and only a ? or
         // an empty box goes on to Muse.
-        let thinking = dots == nil ? nil : add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom))
-        Task {
-            let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
+        let thinking = dots == nil ? nil : add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
+        run { [self] in
+            let (nearPNG, aroundPNG) = await Self.crops(marked.transformed(using: reading), near, around)
+            guard !Task.isCancelled else { return }
             var gesture = "double_dot"
             if dots == nil {
                 guard let jev else { return }
@@ -100,12 +234,13 @@ final class Marks {
             }
             switch gesture {
             case "question":  // the orb shows from the moment Jev sees the ?
-                await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, mark: mark, zoom: zoom,
-                          bubble: add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom)))
+                await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, anchor: anchor,
+                          turn: turn, zoom: zoom, bubble: add(Bubble(anchor: anchor, zoom: zoom, turn: turn)))
             case "double_dot":
-                await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, mark: mark, zoom: zoom, bubble: thinking)
+                await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, anchor: anchor,
+                          turn: turn, zoom: zoom, bubble: thinking)
             case "frame":
-                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, zoom: zoom)
+                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, turn: turn, zoom: zoom)
             default: break  // writing, circles, underlines and the rest are the person's own; nothing wakes
             }
         }
@@ -128,7 +263,7 @@ final class Marks {
         UIView.animate(withDuration: 0.6, delay: 3) { label.alpha = 0 } completion: { _ in label.removeFromSuperview() }
     }
 
-    /// Where a mark's dot sits: just right of its top-right corner.
+    /// Where a mark's dot sits, in the mark's frame: just right of its top-right corner.
     static func anchor(_ mark: CGRect, _ zoom: CGFloat) -> CGPoint { CGPoint(x: mark.maxX + 6 / zoom, y: mark.minY) }
 
     /// Whether the mark's strokes are all still on the page; the person may erase them while Muse reads or draws.
@@ -141,7 +276,7 @@ final class Marks {
 
     /// Answers a ? as a quiet dot to tap open, or a double dot, opened at once. The dot is the thinking orb meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?,
-             trigger: [String], mark: CGRect, zoom: CGFloat, bubble: Bubble?) async {
+             trigger: [String], anchor: CGPoint, turn: CGFloat, zoom: CGFloat, bubble: Bubble?) async {
         guard present(trigger) else { return remove(bubble) }
         asking += 1
         defer { asking -= 1 }
@@ -149,77 +284,72 @@ final class Marks {
         do {
             let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target)
             logger.notice("answered gesture=\(gesture, privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
+            guard !closed else { return }
             guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
-            let note = Note(mark: gesture, trigger: trigger, anchor: Self.anchor(mark, zoom), zoom: zoom, reading: answer.reading,
-                            reply: answer.reply)
+            let note = Note(mark: gesture, trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading, reply: answer.reply, turn: turn)
             notes.append(note)
             save()
             // A ? stays a quiet dot until it's tapped; a double dot asked to be shown now.
-            let shown = bubble ?? add(Bubble(anchor: note.anchor, zoom: zoom))
+            let shown = bubble ?? add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
             shown.note = note
             if gesture == "double_dot" { shown.toggle(true) }
         } catch {
             logger.error("ask failed: \(error.localizedDescription, privacy: .public)")
+            guard !closed else { return }
             bubble?.retry = { [weak self, weak bubble] in
                 bubble?.retry = nil
-                Task { await self?.ask(agent, near, around, gesture: gesture, threads: threads, target: target,
-                                       trigger: trigger, mark: mark, zoom: zoom, bubble: bubble) }
+                self?.run { await self?.ask(agent, near, around, gesture: gesture, threads: threads, target: target,
+                                            trigger: trigger, anchor: anchor, turn: turn, zoom: zoom, bubble: bubble) }
             }
         }
     }
 
-    /// Fills an empty box with the agent's ink: a drawing, or a graph the app computes. A pixel grid shimmers in the box
-    /// meanwhile; if drawing fails, an orange dot at its corner tries again.
-    func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, zoom: CGFloat) async {
+    /// Fills an empty box, drawn level in the page turned by `turn`, with the agent's ink: a drawing, or a graph the app
+    /// computes. A pixel grid shimmers in the box until the ink is written; if drawing fails, an orange dot at its corner
+    /// tries again.
+    func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, turn: CGFloat, zoom: CGFloat) async {
         guard present(trigger) else { return }
         let grid = Thinking(style: .pixels)
         canvas.addSubview(grid)
-        grids.append((grid, box))
-        grid.place(over: box, zoom: canvas.zoomScale)
-        defer {
-            grid.removeFromSuperview()
-            grids.removeAll { $0.view === grid }
+        grids.append((grid, box, turn))
+        grid.place(over: box, turn: turn, zoom: canvas.zoomScale)
+        let done = { [weak self, weak grid] in
+            grid?.removeFromSuperview()
+            self?.grids.removeAll { $0.view === grid }
         }
         asking += 1
         defer { asking -= 1 }
         let start = ContinuousClock.now
         do {
             let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads)
-            guard present(trigger) else { return }
+            guard !closed else { return }
+            guard present(trigger) else { return done() }
             let lines = try drawing.lines(in: box.size)
             // Bound the filled-in points too: a few huge strokes must not become millions of PencilKit samples.
             let step = 2 / zoom
             let length = lines.reduce(CGFloat(0)) { sum, line in sum + zip(line, line.dropFirst()).reduce(0) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) } }
             guard length / step < 100_000 else { throw Plot.Failure("The drawing is too complex") }
+            let page = CGAffineTransform(rotationAngle: -turn), date = Date()
             let strokes = lines.map { line in
-                AgentPen.stroke(line.map { CGPoint(x: box.minX + $0.x, y: box.minY + $0.y) }, width: AgentPen.width(at: zoom), step: step)
+                AgentPen.stroke(line.map { CGPoint(x: box.minX + $0.x, y: box.minY + $0.y).applying(page) }, width: AgentPen.width(at: zoom), step: step, date: date)
             }
             logger.notice("drew kind=\(drawing.kind, privacy: .public) strokes=\(strokes.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
-            let before = canvas.drawing
-            var after = before
-            after.strokes += strokes
-            place(after, note: Note(mark: "frame", trigger: trigger, anchor: Self.anchor(box, zoom), zoom: zoom, reading: drawing.reading,
-                                    reply: drawing.say), replacing: before)
+            let note = Note(mark: "frame", trigger: trigger, anchor: Self.anchor(box, zoom).applying(page), zoom: zoom, reading: drawing.reading,
+                            reply: drawing.say, turn: turn, rect: box, inked: date, source: drawing)
+            enqueue { [weak self] in
+                done()
+                guard let self, present(trigger) else { return nil }
+                return Change(add: strokes, notes: [note])
+            }
         } catch {
             logger.error("draw failed: \(error.localizedDescription, privacy: .public)")
-            let failed = add(Bubble(anchor: Self.anchor(box, zoom), zoom: zoom))
+            done()
+            guard !closed else { return }
+            let failed = add(Bubble(anchor: Self.anchor(box, zoom).applying(CGAffineTransform(rotationAngle: -turn)), zoom: zoom, turn: turn))
             failed.retry = { [weak self, weak failed] in
                 self?.remove(failed)
-                Task { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, zoom: zoom) }
+                self?.run { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, turn: turn, zoom: zoom) }
             }
-        }
-    }
-
-    /// A drawing and its note arrive together and leave together, as one step of undo.
-    func place(_ drawing: PKDrawing, note: Note, replacing previous: PKDrawing) {
-        canvas.drawing = drawing
-        notes.append(note)
-        save()
-        canvas.undoManager?.registerUndo(withTarget: self) { marks in
-            marks.canvas.drawing = previous
-            marks.notes.removeAll { $0.id == note.id }
-            marks.save()
-            marks.canvas.undoManager?.registerUndo(withTarget: marks) { $0.place(drawing, note: note, replacing: previous) }
         }
     }
 
@@ -258,7 +388,7 @@ final class Marks {
     /// Bubbles sit in the canvas's content, so they scroll with the page by themselves; zoom moves and sizes them.
     func layout() {
         bubbles.forEach { $0.place(zoom: canvas.zoomScale) }
-        grids.forEach { $0.view.place(over: $0.box, zoom: canvas.zoomScale) }
+        grids.forEach { $0.view.place(over: $0.box, turn: $0.turn, zoom: canvas.zoomScale) }
     }
 
     func save() {

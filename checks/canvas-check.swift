@@ -12,7 +12,7 @@ import PencilKit
 
 @main
 struct Check {
-    static func main() throws {
+    static func main() async throws {
         let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let page = Page(url: folder, edited: .now)
@@ -33,9 +33,8 @@ struct Check {
         let canvas = controller.canvas, pivot = CGPoint(x: 190, y: 730)
         let anchor = CGPoint(x: 2000, y: 3000)
         let note = Note(mark: "question", trigger: [], anchor: anchor, zoom: 1.5, reading: "test", reply: "test")
-        let drawing = PKDrawing(strokes: [AgentPen.stroke([anchor, CGPoint(x: 2100, y: 3000)], width: 3, step: 2)])
-        controller.marks.place(drawing, note: note, replacing: PKDrawing())
-        let bubble = controller.marks.add(Bubble(anchor: anchor, zoom: 1.5, note: note))
+        controller.marks.apply(.init(add: [AgentPen.stroke([anchor, CGPoint(x: 2100, y: 3000)], width: 3, step: 2)], notes: [note]))
+        let bubble = controller.marks.add(Bubble(anchor: anchor, zoom: 1.5, turn: 0, note: note))
         let ink = canvas.drawing.dataRepresentation()
         let twist = Rotation()
         twist.pivot = pivot
@@ -88,7 +87,62 @@ struct Check {
         controller.redo()
         precondition(canvas.drawing.strokes.count == 1, "redo still restores ink")
         controller.saveNow()
-        print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload")
+
+        // Maple's changes undo by stroke id: undoing an answer leaves the person's later writing and other answers alone.
+        let marks = controller.marks!
+        func ids() -> [String] { canvas.drawing.strokes.map(Marks.id) }
+        func line(_ y: CGFloat) -> PKStroke { AgentPen.stroke([CGPoint(x: 2000, y: y), CGPoint(x: 2060, y: y)], width: 3, step: 2) }
+        let (first, second, theirs) = (line(3100), line(3200), PKStroke(ink: controller.pen.ink, path: line(3300).path))
+        let before = ids()
+        func event() { RunLoop.main.run(until: .now + 0.02) }  // the undo manager closes a group at the end of each event
+        event()
+        marks.apply(.init(add: [first]))
+        event()
+        canvas.drawing.strokes.append(theirs)
+        marks.apply(.init(add: [second]))
+        event()
+        controller.undo()
+        precondition(ids() == before + [Marks.id(first), Marks.id(theirs)], "undo takes only the latest answer")
+        controller.undo()
+        precondition(ids() == before + [Marks.id(theirs)], "and then the one before, keeping the person's stroke")
+        controller.redo()
+        precondition(Set(ids()) == Set(before + [Marks.id(first), Marks.id(theirs)]), "redo brings it back")
+
+        // Maple writes only once the pen has rested, and the page's closing writes what's still queued.
+        let queued = line(3400)
+        marks.penDown()
+        marks.enqueue { .init(add: [queued]) }
+        try await Task.sleep(for: .seconds(1.2))
+        precondition(!ids().contains(Marks.id(queued)), "never while the pen is down")
+        marks.penUp(writing: false)
+        try await Task.sleep(for: .milliseconds(600))
+        precondition(!ids().contains(Marks.id(queued)), "waits for the pen to rest")
+        try await Task.sleep(for: .milliseconds(800))
+        precondition(ids().contains(Marks.id(queued)), "written once the pen rested")
+        let last = line(3500)
+        marks.penDown()
+        marks.enqueue { .init(add: [last]) }
+        marks.stop()
+        precondition(ids().contains(Marks.id(last)) && marks.closed, "closing writes what's queued")
+
+        // On a turned page, marks are measured level: a stroke written level on screen has a flat box in the reading frame,
+        // and overlays read level too.
+        let turn = controller.rotation, level = AgentPen.stroke([CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0)].map {
+            CGPoint(x: 2000 + $0.x, y: 3000 + $0.y).applying(CGAffineTransform(rotationAngle: -turn))
+        }, width: 3, step: 1)
+        let box = Marks.bounds(level, turn: turn, zoom: 2)
+        precondition(abs(box.width - 100 - 3) < 1 && box.height < 4, "level in the reading frame: \(box)")
+        let grid = Thinking(style: .pixels)
+        canvas.addSubview(grid)
+        grid.place(over: CGRect(x: 2000, y: 3000, width: 80, height: 40), turn: turn, zoom: canvas.zoomScale)
+        let corner = CGPoint(x: 2080, y: 3000).applying(CGAffineTransform(rotationAngle: -turn))
+        near(grid.convert(CGPoint(x: 80, y: 0), to: canvas), CGPoint(x: corner.x * canvas.zoomScale, y: corner.y * canvas.zoomScale))
+        let a = grid.convert(CGPoint.zero, to: controller.view), b = grid.convert(CGPoint(x: 80, y: 0), to: controller.view)
+        precondition(abs(a.y - b.y) < 0.5, "the grid reads level on screen")
+        let turned = controller.marks.add(Bubble(anchor: CGPoint(x: 2000, y: 3000), zoom: 2, turn: turn))
+        let c = turned.convert(CGPoint.zero, to: controller.view), d = turned.convert(CGPoint(x: 20, y: 0), to: controller.view)
+        precondition(abs(c.y - d.y) < 0.5, "a bubble reads level on screen")
+        print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, reading frame")
     }
 
     static func near(_ a: CGPoint, _ b: CGPoint) {
