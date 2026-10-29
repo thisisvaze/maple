@@ -15,7 +15,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Answers: quiet dots that open into glass bubbles; a `?` opens a nudge, then a hint, then the answer; saved with the page
 - [x] App icon: a pencil scribble that straightens into a glowing arrow, a rough thought the AI turns into a direction
 - [x] Empty box: Muse draws in it with the agent's blue pen: a line drawing with pen-font labels, or a graph the app plots itself; one undo takes it away
-- [ ] SAM 3.1 for circled regions; multi-agent shared memory
+- [ ] Shared memory the agents read and propose changes to
 
 ## Meta models
 
