@@ -33,7 +33,7 @@ nonisolated struct Muse: Sendable {
     }
 
     /// `schema` (JSON Schema, strict subset) makes the reply text a JSON object that matches it.
-    func respond(_ parts: [Part], instructions: String? = nil, schema: Data? = nil, effort: Effort = .low, maxOutputTokens: Int = 4000) async throws -> Reply {
+    func respond(_ parts: [Part], instructions: String? = nil, schema: Data? = nil, effort: Effort = .minimal, maxOutputTokens: Int = 4000) async throws -> Reply {
         let content: [[String: String]] = parts.map {
             switch $0 {
             case .text(let text): ["type": "input_text", "text": text]
