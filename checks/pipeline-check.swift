@@ -3,7 +3,7 @@
 // It runs inside a bare .app, because PencilKit saves drawing state to preferences and traps without a bundle ID.
 //   S=$(mktemp -d); mkdir $S/Check.app; xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator \
 //     -swift-version 6 -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{Marks,Bubble,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,AgentPen,Jev}.swift checks/pipeline-check.swift -o $S/Check.app/pipeline
+//     Maple/{Marks,Bubble,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,AgentPen,Jev,Thinking}.swift checks/pipeline-check.swift -o $S/Check.app/pipeline
 //   plutil -create xml1 $S/Check.app/Info.plist; plutil -insert CFBundleIdentifier -string dev.maple.check $S/Check.app/Info.plist; cp Maple/futural.jhf $S/Check.app/
 //   SIMCTL_CHILD_MODEL_API_KEY=... SIMCTL_CHILD_TYPESAFE_API_KEY=... xcrun simctl spawn booted $S/Check.app/pipeline $S   # writes near.png, around.png and box.png
 import PencilKit
@@ -36,7 +36,7 @@ struct Check {
         }
         let agent = Agent(muse: Muse(key: key)), jev = Jev(key: jevKey)
         var clock = ContinuousClock.now
-        let questionMark = try await jev.mark(nearPNG)
+        let questionMark = try await jev.mark(nearPNG).mark
         precondition(questionMark == "question", "Jev sees the ?: \(questionMark)")
         let answer = try await agent.ask(near: nearPNG, around: aroundPNG, gesture: "question", threads: [], target: nil)
         print("\(answer) in \(clock.duration(to: .now))")
@@ -44,7 +44,7 @@ struct Check {
         _ = mark
 
         clock = .now
-        let boxMark = try await jev.mark(boxed.near)
+        let boxMark = try await jev.mark(boxed.near).mark
         precondition(boxMark == "frame", "Jev sees an empty box: \(boxMark)")
         let drawing = try await agent.draw(near: boxed.near, around: boxed.around, size: boxed.mark.size, threads: [])
         let ink = try drawing.lines(in: boxed.mark.size).map { line in

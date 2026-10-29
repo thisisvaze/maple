@@ -25,6 +25,7 @@ final class Marks {
     var waiting: Task<Void, Never>?
     var lastTrigger: [String] = []
     var asking = 0
+    weak var lastTag: UILabel?
 
     init(canvas: PKCanvasView, page: Page, notes: [Note]) {
         self.canvas = canvas
@@ -78,8 +79,8 @@ final class Marks {
         let threads = notes.filter { around.contains($0.anchor) }.map { Agent.Thread(id: $0.id, reading: $0.reading, shown: $0.shown) }
         let target = notes.filter { mark.insetBy(dx: -60 / zoom, dy: -60 / zoom).contains($0.anchor) }
             .min { hypot($0.anchor.x - mark.midX, $0.anchor.y - mark.midY) < hypot($1.anchor.x - mark.midX, $1.anchor.y - mark.midY) }?.id
-        // A double dot is known on the device, so it shows thinking at once. Anything else, Jev looks at first, and only a
-        // ? or an empty box goes on to Muse.
+        // A double dot is known on the device, so its orb shows at once. Anything else, Jev looks at first, and only a ? or
+        // an empty box goes on to Muse.
         let thinking = dots == nil ? nil : add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom))
         Task {
             let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
@@ -87,19 +88,43 @@ final class Marks {
             if dots == nil {
                 guard let jev else { return }
                 let start = ContinuousClock.now
-                do { gesture = try await jev.mark(nearPNG) } catch {
+                do {
+                    let verdict = try await jev.mark(nearPNG)
+                    gesture = verdict.mark
+                    tag(verdict)
+                } catch {
                     return logger.error("jev failed: \(error.localizedDescription, privacy: .public)")
                 }
                 logger.notice("jev mark=\(gesture, privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             }
             switch gesture {
-            case "question", "double_dot":
+            case "question":  // the orb shows from the moment Jev sees the ?
+                await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, mark: mark, zoom: zoom,
+                          bubble: add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom)))
+            case "double_dot":
                 await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, mark: mark, zoom: zoom, bubble: thinking)
             case "frame":
                 await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, zoom: zoom)
             default: break  // writing, circles, underlines and the rest are the person's own; nothing wakes
             }
         }
+    }
+
+    /// Jev's verdict in the top-right corner for 3 s, for tuning: what it saw and how sure, "maybe" when that fell short.
+    func tag(_ verdict: Jev.Verdict) {
+        guard let screen = canvas.superview else { return }
+        lastTag?.removeFromSuperview()
+        let label = UILabel()
+        label.text = (verdict.mark == verdict.top ? "" : "maybe ") + verdict.top.replacingOccurrences(of: "_", with: " ") + " \(Int((verdict.probability * 100).rounded()))%"
+        label.font = .preferredFont(forTextStyle: .caption1)
+        label.textColor = .secondaryLabel
+        label.sizeToFit()
+        let safe = screen.safeAreaLayoutGuide.layoutFrame
+        label.frame.origin = CGPoint(x: safe.maxX - label.bounds.width - 16, y: safe.minY + 12)
+        label.autoresizingMask = [.flexibleLeftMargin, .flexibleBottomMargin]
+        screen.addSubview(label)
+        lastTag = label
+        UIView.animate(withDuration: 0.6, delay: 3) { label.alpha = 0 } completion: { _ in label.removeFromSuperview() }
     }
 
     /// Where a mark's dot sits: just right of its top-right corner.
@@ -113,7 +138,7 @@ final class Marks {
         bubbles.removeAll { $0 === bubble }
     }
 
-    /// Answers a ? (as a quiet dot, with a nudge and a hint first) or a double dot (its dot breathing while Muse reads).
+    /// Answers a ? (as a quiet dot, with a nudge and a hint first) or a double dot. The dot is the thinking orb meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?,
              trigger: [String], mark: CGRect, zoom: CGFloat, bubble: Bubble?) async {
         guard present(trigger) else { return remove(bubble) }

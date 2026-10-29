@@ -43,7 +43,7 @@ struct Check {
 
         start = .now
         let questionNear = picture([("49 ", false), ("?", true)])
-        let questionMark = try await jev.mark(questionNear)
+        let questionMark = try await jev.mark(questionNear).mark
         let jevMs = start.duration(to: .now)
         precondition(questionMark == "question", "Jev sees the ?: \(questionMark)")
         let question = try await agent.ask(near: questionNear, around: picture([("x² = 49 ", false), ("?", true)]), gesture: "question", threads: [], target: nil)
@@ -51,7 +51,7 @@ struct Check {
         precondition(question.reply.contains("7") && question.steps.count == 2, "a written ? is answered, with a nudge and a hint")
 
         start = .now
-        let writing = try await jev.mark(picture([("the cell ", false), ("wall", true)]))
+        let writing = try await jev.mark(picture([("the cell ", false), ("wall", true)])).mark
         print("writing: Jev says \(writing) in \(start.duration(to: .now))")
         precondition(writing != "question" && writing != "frame", "plain writing wakes nothing")
 
@@ -65,7 +65,7 @@ struct Check {
         for (label, kind) in [("water cycle", "ink"), ("y = x^2 - 4", "plot")] {
             start = .now
             let box = CGSize(width: 360, height: 240), image = boxed(label)
-            let mark = try await jev.mark(image)
+            let mark = try await jev.mark(image).mark
             precondition(mark == "frame", "an empty box under \(label) is a frame: \(mark)")
             let drawing = try await agent.draw(near: image, around: image, size: box, threads: [])
             let lines = try drawing.lines(in: box, font: font)

@@ -1,8 +1,7 @@
 import UIKit
 
 /// An answer beside its mark: a quiet dot that opens into a glass bubble. A ?'s nudge and hint open one at a time before
-/// the answer. While Muse reads a double dot, the dot is the thinking orb; it turns orange if asking failed, and a tap
-/// tries again.
+/// the answer. While Muse answers, the dot is the thinking orb; it turns orange if asking failed, and a tap tries again.
 /// It lives in the canvas's content, top-left at `anchor`, and grows and shrinks with the page like ink.
 final class Bubble: UIView {
     static let width: CGFloat = 300

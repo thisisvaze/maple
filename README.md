@@ -11,8 +11,8 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Gallery: page cards with cached thumbnails (light and dark), + for a new page, zoom open and close, select and delete
 - [x] Two-finger tap undo, three-finger tap redo, Pencil double-tap swaps pen and eraser
 - [x] Muse Spark 1.3 client (Responses API: text and PNG input, low reasoning effort by default)
-- [x] Marks: 0.6 s after the pen rests, Jev reads the gesture the new ink makes; a `?` or an empty box wakes Muse, and so does a double dot, which the iPad reads from its timing
-- [x] Answers: quiet dots that open into glass bubbles; a `?` opens a nudge, then a hint, then the answer; saved with the page. While Muse reads a double dot, its dot is an opal thinking orb
+- [x] Marks: 0.6 s after the pen rests, Jev reads the gesture the new ink makes; a `?` or an empty box wakes Muse, and so does a double dot, which the iPad reads from its timing. Jev's verdict shows in the top-right corner for 3 s ("question 97%", "maybe frame 62%")
+- [x] Answers: quiet dots that open into glass bubbles; a `?` opens a nudge, then a hint, then the answer; saved with the page. While Muse answers, the dot is an opal thinking orb
 - [x] App icon: a pencil scribble that straightens into a glowing arrow, a rough thought the AI turns into a direction
 - [x] Empty box: Muse draws in it with the agent's blue pen: a line drawing with pen-font labels, or a graph the app plots itself; one undo takes it away. While it's drawn, a grey pixel grid shimmers in the box
 - [ ] Shared memory the agents read and propose changes to

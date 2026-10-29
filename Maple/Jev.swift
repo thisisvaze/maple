@@ -29,8 +29,14 @@ nonisolated struct Jev: Sendable {
         "other": "Something else.",
     ]
 
-    /// The gesture the red ink in `near` ends with: one of `marks`, or "writing" when Jev isn't sure enough.
-    func mark(_ near: Data) async throws -> String {
+    struct Verdict: Sendable {
+        var mark: String  // what Maple acts on: one of `marks`, or "writing" when Jev isn't sure enough
+        var top: String  // Jev's first choice
+        var probability: Double  // of `top`
+    }
+
+    /// The gesture the red ink in `near` ends with.
+    func mark(_ near: Data) async throws -> Verdict {
         let answer = try await ask(near, ["mark": ["type": "choice", "criteria": Self.marks,
             "instructions": "Red ink is the newest gesture; dark ink is context. What gesture does the red ink end with?"]])["mark"]
         let top = answer?.choice ?? "writing", probabilities = answer?.probabilities ?? [:]
@@ -43,7 +49,7 @@ nonisolated struct Jev: Sendable {
                 count. Red ink may also contain the end of the preceding word.
                 """]])["question"]?.noul ?? 0
         }
-        return Self.decide(top, probabilities, confirmedQuestion: confirmed)
+        return Verdict(mark: Self.decide(top, probabilities, confirmedQuestion: confirmed), top: top, probability: probabilities[top, default: 0])
     }
 
     // Calibration knobs: thresholds for real Pencil input, not a measured accuracy.
