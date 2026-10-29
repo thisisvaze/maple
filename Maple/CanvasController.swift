@@ -7,9 +7,9 @@ struct Paper: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: CanvasController, context: Context) {}
 }
 
-/// One page of paper: Apple Pencil writes, two fingers pan and pinch, two-finger tap undoes, three-finger tap redoes,
+/// One page of paper: Apple Pencil writes, two fingers pan, pinch and rotate, two-finger tap undoes, three-finger tap redoes,
 /// and double-tapping the Pencil swaps pen and eraser.
-final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilInteractionDelegate {
+final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilInteractionDelegate, UIGestureRecognizerDelegate {
     // Calibration knobs: tune by feel with a real Pencil.
     static let penWidth: CGFloat = 1.8  // fine handwriting
     static let eraserWidth: CGFloat = 41  // on screen; PencilKit clamps to 16.4–80.4 page points
@@ -22,6 +22,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var loadError: (any Error)?
     var dirty = false
     var laidOut = false
+    var rotation: CGFloat = 0
     var saveTask: Task<Void, Never>?
     var saveErrorShown = false
     let history = UndoManager()
@@ -45,8 +46,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     override func loadView() {
         view = UIView()
         view.backgroundColor = .paper  // the paper sits behind a clear canvas, so things can later go between them
+        view.clipsToBounds = true
         canvas.frame = view.bounds
-        canvas.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(canvas)
     }
 
@@ -84,6 +85,10 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         undoTap.require(toFail: redoTap)
         canvas.addGestureRecognizer(undoTap)
         canvas.addGestureRecognizer(redoTap)
+        let twist = UIRotationGestureRecognizer(target: self, action: #selector(rotate))
+        twist.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
+        twist.delegate = self
+        view.addGestureRecognizer(twist)  // its coordinate space stays still while the canvas turns
         canvas.addInteraction(UIPencilInteraction(delegate: self))
         // Resign-active comes before the app switcher can kill us without a background notification.
         NotificationCenter.default.addObserver(self, selector: #selector(saveNow), name: UIApplication.willResignActiveNotification, object: nil)
@@ -93,10 +98,19 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         super.viewDidLayoutSubviews()
         // One finger or a palm never moves the paper. Set here: PencilKit resets it to 1 on joining a window.
         canvas.panGestureRecognizer.minimumNumberOfTouches = 2
-        guard !laidOut, view.bounds.width > 0 else { return }
-        laidOut = true
-        let v = UserDefaults.standard.array(forKey: page.viewportKey) as? [Double] ?? []
-        if v.count == 3 { show(CGPoint(x: v[0], y: v[1]), zoom: v[2]) } else { show(CGPoint(x: Self.sheet / 2, y: Self.sheet / 2), zoom: 1) }
+        guard view.bounds.width > 0, view.bounds.height > 0 else { return }
+        if laidOut {
+            show(center, zoom: canvas.zoomScale)
+        } else {
+            laidOut = true
+            let v = UserDefaults.standard.array(forKey: page.viewportKey) as? [Double] ?? []
+            if (v.count == 3 || v.count == 4), v.allSatisfy(\.isFinite), v[2] > 0 {
+                rotation = v.count == 4 ? v[3] : 0
+                show(CGPoint(x: v[0], y: v[1]), zoom: v[2])
+            } else {
+                show(CGPoint(x: Self.sheet / 2, y: Self.sheet / 2), zoom: 1)
+            }
+        }
         marks.layout()
     }
 
@@ -128,8 +142,34 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     func show(_ center: CGPoint, zoom: CGFloat) {
+        let turn = CGAffineTransform(rotationAngle: rotation)
+        // Cover every screen corner at any angle; resizing a transformed view's frame would distort it.
+        canvas.bounds.size = view.bounds.applying(turn.inverted()).size
+        canvas.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        canvas.transform = turn
         canvas.zoomScale = zoom
-        canvas.contentOffset = CGPoint(x: center.x * zoom - canvas.bounds.width / 2, y: center.y * zoom - canvas.bounds.height / 2)
+        canvas.contentOffset = CGPoint(x: center.x * canvas.zoomScale - canvas.bounds.width / 2,
+                                       y: center.y * canvas.zoomScale - canvas.bounds.height / 2)
+    }
+
+    @objc func rotate(_ gesture: UIRotationGestureRecognizer) {
+        guard loadError == nil else { return }
+        switch gesture.state {
+        case .began, .changed:
+            let pivot = gesture.location(in: view), before = canvas.convert(pivot, from: view)
+            rotation = (rotation + gesture.rotation).remainder(dividingBy: 2 * .pi)
+            gesture.rotation = 0
+            show(center, zoom: canvas.zoomScale)
+            let after = canvas.convert(pivot, from: view)
+            canvas.contentOffset.x += before.x - after.x
+            canvas.contentOffset.y += before.y - after.y
+        case .ended, .cancelled: save()
+        default: break
+        }
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        other === canvas.panGestureRecognizer || other === canvas.pinchGestureRecognizer
     }
 
     @objc func undo() { if history.canUndo { history.undo() } }
@@ -162,7 +202,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     func save() {
-        UserDefaults.standard.set([center.x, center.y, canvas.zoomScale], forKey: page.viewportKey)
+        UserDefaults.standard.set([center.x, center.y, canvas.zoomScale, rotation], forKey: page.viewportKey)
         guard dirty, loadError == nil else { return }
         dirty = false
         let drawing = canvas.drawing, url = page.ink  // copied here, encoded off the main thread
