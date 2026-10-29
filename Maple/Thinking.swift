@@ -41,24 +41,12 @@ nonisolated enum Orb {
     /// Opal colours drifting round the ring, over a pearl base, lit by a glint that travels round it.
     static func color(_ dot: Dot, at t: Double, dark: Bool) -> SIMD3<Double> {
         let angle = atan2(dot.y - 32, dot.x - 32)
-        let tint = Glitter.blend(opal, at: angle / (2 * .pi) + t * 0.014)
+        let tint = blend(opal, at: angle / (2 * .pi) + t * 0.014)
         let glint = pow(max(0, cos(angle + t * 0.13)), 16)
         let pearl: SIMD3<Double> = dark ? [0.80, 0.84, 0.89] : [0.31, 0.35, 0.42]
         let lit = pearl + (tint - pearl) * (0.3 + 0.6 * glint)
         return lit + ((dark ? [1, 1, 1] : [0.68, 0.73, 0.78]) - lit) * (glint * 0.5)
     }
-}
-
-/// Glitter for a box being drawn in: sparkles in the icon's iridescent colours, each twinkling on its own clock, and
-/// now and then a faint holographic sheen sweeping across.
-nonisolated enum Glitter {
-    struct Sparkle {
-        var x, y, radius, alpha: Double
-        var color: SIMD3<Double>
-        var star: Bool  // the brightest twinkles are four-point stars; the rest are dots
-    }
-
-    static let palette: [SIMD3<Double>] = [[0.18, 0.42, 1.0], [0.48, 0.24, 0.94], [0.86, 0.36, 0.78], [0.24, 0.74, 0.86], [0.95, 0.76, 0.36]]
 
     /// The cyclic blend of `colors` at `position`, which wraps every 1.
     static func blend(_ colors: [SIMD3<Double>], at position: Double) -> SIMD3<Double> {
@@ -66,36 +54,37 @@ nonisolated enum Glitter {
         let i = Int(p) % colors.count, f = p - p.rounded(.down)
         return colors[i] + (colors[(i + 1) % colors.count] - colors[i]) * f
     }
+}
 
-    static func hash(_ a: Int, _ b: Int) -> Double {
-        let h = sin(Double(a) * 12.9898 + Double(b) * 78.233) * 43758.5453
-        return h - h.rounded(.down)
+/// The pixel grid over a box being drawn in: grey cells about a 32nd of the box, a soft diagonal wave rolling through,
+/// and each cell flickering a little on its own clock.
+nonisolated enum PixelGrid {
+    struct Cell {
+        var rect: CGRect
+        var alpha: Double
     }
 
-    // Calibration knobs: density and twinkle, tuned to read as subtle on paper.
-    static func sparkles(in size: CGSize, at t: Double) -> [Sparkle] {
-        let w = size.width * 0.88, h = size.height * 0.88, x0 = size.width * 0.06, y0 = size.height * 0.06
-        guard w > 0, h > 0 else { return [] }
-        let count = min(140, max(14, Int(w * h / 700)))
-        return (0..<count).map { i in
-            let x = x0 + hash(i, 1) * w, y = y0 + hash(i, 2) * h, size = hash(i, 5)
-            // Mostly faint, with a brief bright peak: sin raised to a high power.
-            let twinkle = pow(max(0, sin(t * (0.9 + 1.4 * hash(i, 4)) + hash(i, 3) * 2 * .pi)), 8)
-            return Sparkle(x: x, y: y, radius: (0.7 + 1.5 * size) * (0.6 + 0.6 * twinkle), alpha: 0.07 + 0.8 * twinkle,
-                           color: blend(palette, at: (x + y) / (w + h) * 0.8 + t * 0.05), star: twinkle > 0.45 && size > 0.5)
+    static func frame(size: CGSize, at t: Double) -> [Cell] {
+        let area = CGRect(origin: .zero, size: size).insetBy(dx: size.width * 0.06, dy: size.height * 0.06)
+        guard area.width > 0, area.height > 0 else { return [] }
+        let side = max(8, max(area.width, area.height) / 32)
+        var cells: [Cell] = []
+        for row in 0..<Int((area.height / side).rounded(.up)) {
+            for column in 0..<Int((area.width / side).rounded(.up)) {
+                let x = Double(column), y = Double(row)
+                let grain = sin(x * 12.9898 + y * 78.233) * 43758.5453, phase = (grain - grain.rounded(.down)) * 2 * .pi
+                let wave = (1 + sin(x * 0.24 + y * 0.18 - t * 1.2)) / 2
+                let rect = CGRect(x: area.minX + CGFloat(column) * side, y: area.minY + CGFloat(row) * side, width: side, height: side)
+                cells.append(Cell(rect: rect.intersection(area), alpha: 0.035 + 0.07 * (1 + sin(t * 0.8 + phase)) / 2 + 0.09 * wave))
+            }
         }
-    }
-
-    /// Where the sheen's centre line crosses the box diagonal, 0 to 1, or nil between sweeps.
-    static func sheen(at t: Double) -> Double? {
-        let cycle = (t * 0.16).truncatingRemainder(dividingBy: 1)
-        return cycle < 0.5 ? cycle * 2 * 1.4 - 0.2 : nil
+        return cells
     }
 }
 
-/// A thinking animation: the opal orb in an answer's dot, or glitter over a box being drawn in.
+/// A thinking animation: the opal orb in an answer's dot, or the pixel grid over a box being drawn in.
 final class Thinking: UIView {
-    enum Style { case orb, glitter }
+    enum Style { case orb, pixels }
     let style: Style
     var time = 0.6
     var lastFrame = 0.0
@@ -173,35 +162,10 @@ final class Thinking: UIView {
                 context.setFillColor(color(Orb.color(dot, at: time, dark: dark), dot.alpha))
                 context.fillEllipse(in: CGRect(x: dot.x - dot.radius, y: dot.y - dot.radius, width: dot.radius * 2, height: dot.radius * 2))
             }
-        case .glitter:
-            if let sheen = Glitter.sheen(at: time) {
-                // A narrow diagonal band of holographic foil, blue through violet and pink to gold, across the whole box.
-                context.saveGState()
-                context.clip(to: bounds)
-                let along = CGPoint(x: bounds.width * sheen, y: bounds.height * sheen)
-                let half = (bounds.width + bounds.height) * 0.09
-                let peak = dark ? 0.14 : 0.08
-                let colors = [color(Glitter.palette[0], 0), color(Glitter.palette[0], peak * 0.7), color(Glitter.palette[1], peak),
-                              color(Glitter.palette[2], peak), color(Glitter.palette[4], peak * 0.7), color(Glitter.palette[4], 0)] as CFArray
-                if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.25, 0.42, 0.58, 0.75, 1]) {
-                    context.drawLinearGradient(gradient, start: CGPoint(x: along.x - half, y: along.y - half),
-                                               end: CGPoint(x: along.x + half, y: along.y + half), options: [])
-                }
-                context.restoreGState()
-            }
-            for s in Glitter.sparkles(in: bounds.size, at: time) {
-                // On paper the colours go a touch deeper so faint sparkles still show; on dark they glow.
-                let c = dark ? s.color + (SIMD3<Double>(1, 1, 1) - s.color) * 0.25 : s.color * 0.85
-                context.setFillColor(color(c, s.alpha))
-                if s.star {
-                    let arm = s.radius * 3.2, waist = s.radius * 0.45
-                    context.addLines(between: [CGPoint(x: s.x, y: s.y - arm), CGPoint(x: s.x + waist, y: s.y - waist), CGPoint(x: s.x + arm, y: s.y),
-                                               CGPoint(x: s.x + waist, y: s.y + waist), CGPoint(x: s.x, y: s.y + arm), CGPoint(x: s.x - waist, y: s.y + waist),
-                                               CGPoint(x: s.x - arm, y: s.y), CGPoint(x: s.x - waist, y: s.y - waist)])
-                    context.fillPath()
-                } else {
-                    context.fillEllipse(in: CGRect(x: s.x - s.radius, y: s.y - s.radius, width: s.radius * 2, height: s.radius * 2))
-                }
+        case .pixels:
+            for cell in PixelGrid.frame(size: bounds.size, at: time) {
+                context.setFillColor(UIColor.secondaryLabel.withAlphaComponent(cell.alpha).cgColor)
+                context.fill(cell.rect)
             }
         }
     }

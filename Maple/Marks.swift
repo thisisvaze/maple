@@ -21,7 +21,7 @@ final class Marks {
     let jev = Jev.bundled
     var notes: [Note]
     var bubbles: [Bubble] = []
-    var glitters: [(view: Thinking, box: CGRect)] = []  // over boxes being drawn in
+    var grids: [(view: Thinking, box: CGRect)] = []  // over boxes being drawn in
     var waiting: Task<Void, Never>?
     var lastTrigger: [String] = []
     var asking = 0
@@ -139,17 +139,17 @@ final class Marks {
         }
     }
 
-    /// Fills an empty box with the agent's ink: a drawing, or a graph the app computes. Glitter twinkles in the box
+    /// Fills an empty box with the agent's ink: a drawing, or a graph the app computes. A pixel grid shimmers in the box
     /// meanwhile; if drawing fails, an orange dot at its corner tries again.
     func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, zoom: CGFloat) async {
         guard present(trigger) else { return }
-        let glitter = Thinking(style: .glitter)
-        canvas.addSubview(glitter)
-        glitters.append((glitter, box))
-        glitter.place(over: box, zoom: canvas.zoomScale)
+        let grid = Thinking(style: .pixels)
+        canvas.addSubview(grid)
+        grids.append((grid, box))
+        grid.place(over: box, zoom: canvas.zoomScale)
         defer {
-            glitter.removeFromSuperview()
-            glitters.removeAll { $0.view === glitter }
+            grid.removeFromSuperview()
+            grids.removeAll { $0.view === grid }
         }
         asking += 1
         defer { asking -= 1 }
@@ -234,7 +234,7 @@ final class Marks {
     /// Bubbles sit in the canvas's content, so they scroll with the page by themselves; zoom moves and sizes them.
     func layout() {
         bubbles.forEach { $0.place(zoom: canvas.zoomScale) }
-        glitters.forEach { $0.view.place(over: $0.box, zoom: canvas.zoomScale) }
+        grids.forEach { $0.view.place(over: $0.box, zoom: canvas.zoomScale) }
     }
 
     func save() {
