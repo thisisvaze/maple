@@ -1,11 +1,14 @@
 // Runs marks through the app's own path on an iPad simulator: PencilKit strokes → Grouping → red crops → Jev → Muse → agent ink.
 // Strokes are letter outlines from a handwriting font: "x² = 49 ?" (its dot last), then "triangle" with an empty box under it.
+// Offline, a known answer is placed by Room and written by Handwriting beside the ?; with keys, Muse's own answer is too.
 // It runs inside a bare .app, because PencilKit saves drawing state to preferences and traps without a bundle ID.
-//   S=$(mktemp -d); mkdir $S/Check.app; xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator \
+//   S=$(mktemp -d); mkdir $S/Check.app; sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > $S/Colors.swift
+//   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator \
 //     -swift-version 6 -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{Marks,Bubble,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,AgentPen,Jev,Thinking}.swift checks/pipeline-check.swift -o $S/Check.app/pipeline
-//   plutil -create xml1 $S/Check.app/Info.plist; plutil -insert CFBundleIdentifier -string dev.maple.check $S/Check.app/Info.plist; cp Maple/futural.jhf $S/Check.app/
-//   SIMCTL_CHILD_MODEL_API_KEY=... SIMCTL_CHILD_TYPESAFE_API_KEY=... xcrun simctl spawn booted $S/Check.app/pipeline $S   # writes near.png, around.png and box.png
+//     Maple/{Marks,Bubble,Written,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     $S/Colors.swift checks/pipeline-check.swift -o $S/Check.app/pipeline
+//   plutil -create xml1 $S/Check.app/Info.plist; plutil -insert CFBundleIdentifier -string dev.maple.check $S/Check.app/Info.plist; cp Maple/*.jhf $S/Check.app/
+//   SIMCTL_CHILD_MODEL_API_KEY=... SIMCTL_CHILD_TYPESAFE_API_KEY=... xcrun simctl spawn booted $S/Check.app/pipeline $S   # writes the PNGs there
 import PencilKit
 
 @main
@@ -20,6 +23,9 @@ struct Check {
         try nearPNG.write(to: out.appending(path: "near.png"))
         try aroundPNG.write(to: out.appending(path: "around.png"))
         print("crops ok: \(out.path)")
+        let offline = try write("x = 7 or x = −7", beside: question, trigger: trigger, to: out.appending(path: "answer.png"))
+        precondition(offline.kind == .sameLine, "an answer on an empty page goes on the ?'s line: \(offline.kind)")
+        print("ink answer ok: answer.png")
 
         // A label, then an empty box drawn under it 2 s later.
         let label = handwriting("triangle", at: CGPoint(x: 1000, y: 2000), size: 56, start: start + 100)
@@ -42,6 +48,10 @@ struct Check {
         print("\(answer) in \(clock.duration(to: .now))")
         precondition(answer.reply.contains("7"), "Muse answers the written ?")
         _ = mark
+        if !answer.passage, Handwriting.answers.writable(answer.reply) != nil {
+            let live = try write(answer.reply, beside: question, trigger: trigger, to: out.appending(path: "answer-live.png"))
+            print("Muse's answer written \(live.kind.rawValue): answer-live.png")
+        }
 
         clock = .now
         let boxMark = try await jev.mark(boxed.near).mark
@@ -55,6 +65,33 @@ struct Check {
         try page.image(from: boxed.mark.insetBy(dx: -60, dy: -90), scale: 2).pngData()!.write(to: out.appending(path: "box.png"))
         precondition(!ink.isEmpty && ink.allSatisfy { boxed.mark.insetBy(dx: -4, dy: -4).contains($0.renderBounds) }, "the drawing sits inside its box")
         print("pipeline ok: box.png in \(out.path)")
+    }
+
+    /// Places and writes `reply` beside the mark at the end of `strokes` as Marks.write does, on an iPad screen at zoom 1, and
+    /// saves the page around it.
+    static func write(_ reply: String, beside strokes: [PKStroke], trigger: [String], to file: URL) throws -> Room.Placement {
+        let pen = Handwriting.answers
+        guard let text = pen.writable(reply) else { throw Plot.Failure("not writable: \(reply)") }
+        let mark = strokes.filter { trigger.contains(Marks.id($0)) }.reduce(CGRect.null) { $0.union($1.renderBounds) }
+        let screen = CGRect(x: mark.midX - 410, y: mark.midY - 590, width: 820, height: 1180)
+        let corners = [CGPoint(x: screen.minX, y: screen.minY), CGPoint(x: screen.maxX, y: screen.minY),
+                       CGPoint(x: screen.maxX, y: screen.maxY), CGPoint(x: screen.minX, y: screen.maxY)]
+        let ink = strokes.flatMap { stroke in
+            Marks.points(stroke, every: 2).map { Room.Stroke(points: $0, person: true, mark: trigger.contains(Marks.id(stroke))) }
+        }
+        let request = Room.Request(strokes: ink, doubleDot: false, screen: corners, avoid: [], screenAngle: 0, zoom: 1, nib: nil)
+        guard let place = Room.place(request, layout: { cap, width in
+            let lines = pen.wrap(text, cap: cap, width: width)
+            return (pen.extent(lines, cap: cap), lines.count)
+        }) else { throw Plot.Failure("no room for \(reply)") }
+        let lines = pen.wrap(text, cap: place.cap, width: place.width)
+        let page = CGAffineTransform(rotationAngle: -place.angle), date = Date()
+        let answer = (place.leader + pen.pen(lines, at: place.origin, cap: place.cap).map { $0.map { $0.applying(page) } }).map {
+            AgentPen.stroke($0, width: AgentPen.width(at: 1), step: 2, date: date)
+        }
+        let drawing = PKDrawing(strokes: strokes + answer)
+        try drawing.image(from: mark.union(place.rect).insetBy(dx: -80, dy: -60), scale: 2).pngData()!.write(to: file)
+        return place
     }
 
     /// The app's crops for the mark at the end of `strokes`: the mark in red, a close-up and an iPad screen around it.

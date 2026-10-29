@@ -48,7 +48,13 @@ struct Check {
         precondition(questionMark == "question", "Jev sees the ?: \(questionMark)")
         let question = try await agent.ask(near: questionNear, around: picture([("x² = 49 ", false), ("?", true)]), gesture: "question", threads: [], target: nil)
         print("question: Jev \(jevMs), then \(question) in \(start.duration(to: .now))")
-        precondition(question.reply.contains("7"), "a written ? is answered")
+        precondition(question.reply.contains("7") && !question.passage, "a written ? is answered, in ink")
+
+        start = .now
+        let named = picture([("Gettysburg Address ", false), ("?", true)])  // fits the 640 px picture
+        let quote = try await agent.ask(near: named, around: named, gesture: "question", threads: [], target: nil)
+        print("exact text: \(quote) in \(start.duration(to: .now))")
+        precondition(quote.passage && quote.reply.contains("Four score"), "exact text is marked, so it stays a quiet dot")
 
         start = .now
         let writing = try await jev.mark(picture([("the cell ", false), ("wall", true)])).mark
