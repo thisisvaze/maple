@@ -1,7 +1,8 @@
 import UIKit
 
 /// An answer beside its mark: a quiet dot that opens into a glass bubble. A ?'s nudge and hint open one at a time before
-/// the answer. The dot breathes while Muse reads a double dot, and turns orange if asking failed; a tap tries again.
+/// the answer. While Muse reads a double dot, the dot is the thinking orb; it turns orange if asking failed, and a tap
+/// tries again.
 /// It lives in the canvas's content, top-left at `anchor`, and grows and shrinks with the page like ink.
 final class Bubble: UIView {
     static let width: CGFloat = 300
@@ -14,6 +15,7 @@ final class Bubble: UIView {
     var open = false
 
     let dot = UIView()
+    let orb = Thinking(style: .orb)
     let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     let label = UILabel()
     let more = UIButton(configuration: .plain())  // "hint ›" or "answer ›"
@@ -28,6 +30,7 @@ final class Bubble: UIView {
         layer.anchorPoint = .zero  // `center` is then the top-left, so it can sit at the anchor
         dot.layer.cornerRadius = 6
         addSubview(dot)
+        addSubview(orb)
         glass.cornerConfiguration = .uniformCorners(radius: .fixed(14))
         addSubview(glass)
         label.font = .preferredFont(forTextStyle: .callout)
@@ -81,14 +84,16 @@ final class Bubble: UIView {
 
     func update() {
         dot.backgroundColor = retry == nil ? Marks.ink : .systemOrange
-        dot.isHidden = open
         glass.isHidden = !open
         isAccessibilityElement = !open
         accessibilityLabel = retry != nil ? "Couldn't answer. Try again" : note == nil ? "Thinking" : "Answer"
-        breathe(note == nil && retry == nil)
+        let thinking = note == nil && retry == nil
+        orb.isHidden = !thinking
+        dot.isHidden = open || thinking
         guard open, let note else {
-            bounds = CGRect(x: 0, y: 0, width: 28, height: 28)
+            bounds = CGRect(x: 0, y: 0, width: thinking ? 34 : 28, height: thinking ? 34 : 28)
             dot.frame = CGRect(x: 8, y: 8, width: 12, height: 12)
+            orb.frame = bounds
             return
         }
         label.text = note.shown
@@ -105,23 +110,12 @@ final class Bubble: UIView {
         more.frame = CGRect(x: 4, y: row, width: 110, height: 32)
     }
 
-    func breathe(_ on: Bool) {
-        dot.layer.removeAnimation(forKey: "breathe")
-        guard on, !UIAccessibility.isReduceMotionEnabled else { return }
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1
-        pulse.toValue = 0.25
-        pulse.duration = 0.7
-        pulse.autoreverses = true
-        pulse.repeatCount = .infinity
-        dot.layer.add(pulse, forKey: "breathe")
-    }
-
     /// Sits at its anchor and scales with the page since its mark was made; text stays sharp up to 3× that.
     func place(zoom current: CGFloat) {
         let scale = current / zoom
         transform = CGAffineTransform(scaleX: scale, y: scale)
         center = CGPoint(x: anchor.x * current, y: anchor.y * current)
         label.contentScaleFactor = traitCollection.displayScale * min(max(scale, 1), 3)
+        orb.contentScaleFactor = label.contentScaleFactor
     }
 }

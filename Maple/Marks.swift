@@ -21,6 +21,7 @@ final class Marks {
     let jev = Jev.bundled
     var notes: [Note]
     var bubbles: [Bubble] = []
+    var glitters: [(view: Thinking, box: CGRect)] = []  // over boxes being drawn in
     var waiting: Task<Void, Never>?
     var lastTrigger: [String] = []
     var asking = 0
@@ -95,7 +96,7 @@ final class Marks {
             case "question", "double_dot":
                 await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, mark: mark, zoom: zoom, bubble: thinking)
             case "frame":
-                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, zoom: zoom, bubble: add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom)))
+                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, zoom: zoom)
             default: break  // writing, circles, underlines and the rest are the person's own; nothing wakes
             }
         }
@@ -138,16 +139,24 @@ final class Marks {
         }
     }
 
-    /// Fills an empty box with the agent's ink: a drawing, or a graph the app computes. The box's dot breathes meanwhile.
-    func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread],
-              trigger: [String], box: CGRect, zoom: CGFloat, bubble: Bubble) async {
-        guard present(trigger) else { return remove(bubble) }
+    /// Fills an empty box with the agent's ink: a drawing, or a graph the app computes. Glitter twinkles in the box
+    /// meanwhile; if drawing fails, an orange dot at its corner tries again.
+    func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, zoom: CGFloat) async {
+        guard present(trigger) else { return }
+        let glitter = Thinking(style: .glitter)
+        canvas.addSubview(glitter)
+        glitters.append((glitter, box))
+        glitter.place(over: box, zoom: canvas.zoomScale)
+        defer {
+            glitter.removeFromSuperview()
+            glitters.removeAll { $0.view === glitter }
+        }
         asking += 1
         defer { asking -= 1 }
         let start = ContinuousClock.now
         do {
             let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads)
-            guard present(trigger) else { return remove(bubble) }
+            guard present(trigger) else { return }
             let lines = try drawing.lines(in: box.size)
             // Bound the filled-in points too: a few huge strokes must not become millions of PencilKit samples.
             let step = 2 / zoom
@@ -162,13 +171,12 @@ final class Marks {
             after.strokes += strokes
             place(after, note: Note(mark: "frame", trigger: trigger, anchor: Self.anchor(box, zoom), zoom: zoom, reading: drawing.reading,
                                     reply: drawing.say, steps: []), replacing: before)
-            remove(bubble)
         } catch {
             logger.error("draw failed: \(error.localizedDescription, privacy: .public)")
-            bubble.retry = { [weak self, weak bubble] in
-                guard let bubble else { return }
-                bubble.retry = nil
-                Task { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, zoom: zoom, bubble: bubble) }
+            let failed = add(Bubble(anchor: Self.anchor(box, zoom), zoom: zoom))
+            failed.retry = { [weak self, weak failed] in
+                self?.remove(failed)
+                Task { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, zoom: zoom) }
             }
         }
     }
@@ -224,7 +232,10 @@ final class Marks {
     }
 
     /// Bubbles sit in the canvas's content, so they scroll with the page by themselves; zoom moves and sizes them.
-    func layout() { bubbles.forEach { $0.place(zoom: canvas.zoomScale) } }
+    func layout() {
+        bubbles.forEach { $0.place(zoom: canvas.zoomScale) }
+        glitters.forEach { $0.view.place(over: $0.box, zoom: canvas.zoomScale) }
+    }
 
     func save() {
         let notes = notes, url = page.notesFile

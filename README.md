@@ -12,9 +12,9 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Two-finger tap undo, three-finger tap redo, Pencil double-tap swaps pen and eraser
 - [x] Muse Spark 1.3 client (Responses API: text and PNG input, low reasoning effort by default)
 - [x] Marks: 0.6 s after the pen rests, Jev reads the gesture the new ink makes; a `?` or an empty box wakes Muse, and so does a double dot, which the iPad reads from its timing
-- [x] Answers: quiet dots that open into glass bubbles; a `?` opens a nudge, then a hint, then the answer; saved with the page
+- [x] Answers: quiet dots that open into glass bubbles; a `?` opens a nudge, then a hint, then the answer; saved with the page. While Muse reads a double dot, its dot is an opal thinking orb
 - [x] App icon: a pencil scribble that straightens into a glowing arrow, a rough thought the AI turns into a direction
-- [x] Empty box: Muse draws in it with the agent's blue pen: a line drawing with pen-font labels, or a graph the app plots itself; one undo takes it away
+- [x] Empty box: Muse draws in it with the agent's blue pen: a line drawing with pen-font labels, or a graph the app plots itself; one undo takes it away. While it's drawn, glitter twinkles in the box and a holographic sheen sweeps across
 - [ ] Shared memory the agents read and propose changes to
 
 ## Models
@@ -54,3 +54,5 @@ The app reads the keys from its Info.plist, so they end up inside the built app.
 ## Credits
 
 Agent labels are written in Hershey Simplex Sans (`Maple/futural.jhf`). The Hershey Fonts were originally created by Dr. A. V. Hershey at the U.S. National Bureau of Standards; see `Maple/Hershey-LICENSE.txt`.
+
+The thinking orb ports the "breathing" ring of [Thinking Orbs](https://github.com/Jakubantalik/Libraries.dev/tree/main/packages/thinking-orbs) by Jakub Antalik, MIT; see `Maple/ThinkingOrbs-LICENSE.txt`.
