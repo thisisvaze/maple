@@ -1,7 +1,7 @@
 import PencilKit
 import os
 
-nonisolated let log = Logger(subsystem: "dev.maple", category: "marks")
+nonisolated let logger = Logger(subsystem: "dev.maple", category: "marks")
 
 /// After each pen pause, finds the mark just made, asks the agent about it, and keeps the answers as bubbles on the page.
 final class Marks {
@@ -28,8 +28,8 @@ final class Marks {
         self.canvas = canvas
         self.page = page
         self.notes = notes
-        notes.forEach { add(Bubble(anchor: $0.anchor, zoom: $0.zoom, note: $0)) }
-        if agent == nil { log.error("No MODEL_API_KEY in Secrets.xcconfig: marks are off") }
+        notes.filter { $0.mark != "frame" }.forEach { add(Bubble(anchor: $0.anchor, zoom: $0.zoom, note: $0)) }  // a drawing is its own ink
+        if agent == nil { logger.error("No MODEL_API_KEY in Secrets.xcconfig: marks are off") }
     }
 
     func penDown() { waiting?.cancel() }
@@ -50,7 +50,7 @@ final class Marks {
     func look() {
         guard let agent, asking < Self.maxAsking else { return }
         let drawing = canvas.drawing, zoom = canvas.zoomScale
-        let recent = drawing.strokes.suffix(12).map { stroke in
+        let recent = drawing.strokes.filter { !AgentPen.wrote($0) }.suffix(12).map { stroke in
             let started = stroke.path.creationDate.timeIntervalSince1970
             return Grouping.Stroke(id: Self.id(stroke), bounds: stroke.renderBounds, started: started, ended: started + (stroke.path.last?.timeOffset ?? 0))
         }
@@ -77,45 +77,102 @@ final class Marks {
         let target = notes.filter { mark.insetBy(dx: -60 / zoom, dy: -60 / zoom).contains($0.anchor) }
             .min { hypot($0.anchor.x - mark.midX, $0.anchor.y - mark.midY) < hypot($1.anchor.x - mark.midX, $1.anchor.y - mark.midY) }?.id
         let gesture = dots == nil ? nil : "double_dot"
-        let anchor = CGPoint(x: mark.maxX + 6 / zoom, y: mark.minY)
 
-        // A double dot is known on the device, so it shows thinking at once; a ? only shows once Muse calls it one.
-        let bubble = gesture == nil ? nil : add(Bubble(anchor: anchor, zoom: zoom))
+        // A double dot is known on the device, so it shows thinking at once; a ? or a box only once Muse calls it one.
+        let bubble = gesture == nil ? nil : add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom))
         Task {
             let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
             await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target,
-                      trigger: trigger, anchor: anchor, zoom: zoom, bubble: bubble)
+                      trigger: trigger, mark: mark, zoom: zoom, bubble: bubble)
         }
     }
 
+    /// Where a mark's dot sits: just right of its top-right corner.
+    static func anchor(_ mark: CGRect, _ zoom: CGFloat) -> CGPoint { CGPoint(x: mark.maxX + 6 / zoom, y: mark.minY) }
+
+    /// Whether the mark's strokes are all still on the page; the person may erase them while Muse reads or draws.
+    func present(_ trigger: [String]) -> Bool { Set(canvas.drawing.strokes.map(Self.id)).isSuperset(of: trigger) }
+
+    func remove(_ bubble: Bubble?) {
+        bubble?.removeFromSuperview()
+        bubbles.removeAll { $0 === bubble }
+    }
+
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String?, threads: [Agent.Thread], target: String?,
-             trigger: [String], anchor: CGPoint, zoom: CGFloat, bubble: Bubble?) async {
-        // The person may have erased the mark: before a retry, or while Muse was reading it.
-        func present() -> Bool { Set(canvas.drawing.strokes.map(Self.id)).isSuperset(of: trigger) }
-        func drop() {
-            bubble?.removeFromSuperview()
-            bubbles.removeAll { $0 === bubble }
-        }
-        guard present() else { return drop() }
+             trigger: [String], mark: CGRect, zoom: CGFloat, bubble: Bubble?) async {
+        guard present(trigger) else { return remove(bubble) }
         asking += 1
         defer { asking -= 1 }
         let start = ContinuousClock.now
         do {
             let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target)
-            log.notice("mark=\(answer.mark, privacy: .public) gesture=\(gesture ?? "-", privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
-            guard present(), gesture != nil || answer.mark == "question", !answer.reply.isEmpty else { return drop() }
-            let note = Note(mark: gesture ?? "question", trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading,
+            logger.notice("mark=\(answer.mark, privacy: .public) gesture=\(gesture ?? "-", privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
+            guard present(trigger) else { return remove(bubble) }
+            if gesture == nil, answer.mark == "frame" {
+                let thinking = add(Bubble(anchor: Self.anchor(mark, zoom), zoom: zoom))
+                return await draw(agent, near, around, reading: answer.reading, threads: threads, trigger: trigger, box: mark, zoom: zoom, bubble: thinking)
+            }
+            guard gesture != nil || answer.mark == "question", !answer.reply.isEmpty else { return remove(bubble) }
+            let note = Note(mark: gesture ?? "question", trigger: trigger, anchor: Self.anchor(mark, zoom), zoom: zoom, reading: answer.reading,
                             reply: answer.reply, steps: gesture == nil ? Array(answer.steps.prefix(2)) : [])
             notes.append(note)
             save()
-            if let bubble { bubble.note = note } else { add(Bubble(anchor: anchor, zoom: zoom, note: note)) }
+            if let bubble { bubble.note = note } else { add(Bubble(anchor: note.anchor, zoom: zoom, note: note)) }
         } catch {
-            log.error("ask failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("ask failed: \(error.localizedDescription, privacy: .public)")
             bubble?.retry = { [weak self, weak bubble] in
                 bubble?.retry = nil
                 Task { await self?.ask(agent, near, around, gesture: gesture, threads: threads, target: target,
-                                       trigger: trigger, anchor: anchor, zoom: zoom, bubble: bubble) }
+                                       trigger: trigger, mark: mark, zoom: zoom, bubble: bubble) }
             }
+        }
+    }
+
+    /// Fills an empty box with the agent's ink: a drawing, or a graph the app computes. The box's dot breathes meanwhile.
+    func draw(_ agent: Agent, _ near: Data, _ around: Data, reading: String, threads: [Agent.Thread],
+              trigger: [String], box: CGRect, zoom: CGFloat, bubble: Bubble) async {
+        guard present(trigger) else { return remove(bubble) }
+        asking += 1
+        defer { asking -= 1 }
+        let start = ContinuousClock.now
+        do {
+            let drawing = try await agent.draw(near: near, around: around, size: box.size, reading: reading, threads: threads)
+            guard present(trigger) else { return remove(bubble) }
+            let lines = try drawing.lines(in: box.size)
+            // Bound the filled-in points too: a few huge strokes must not become millions of PencilKit samples.
+            let step = 2 / zoom
+            let length = lines.reduce(CGFloat(0)) { sum, line in sum + zip(line, line.dropFirst()).reduce(0) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) } }
+            guard length / step < 100_000 else { throw Plot.Failure("The drawing is too complex") }
+            let strokes = lines.map { line in
+                AgentPen.stroke(line.map { CGPoint(x: box.minX + $0.x, y: box.minY + $0.y) }, width: AgentPen.width(at: zoom), step: step)
+            }
+            logger.notice("drew kind=\(drawing.kind, privacy: .public) strokes=\(strokes.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
+            let before = canvas.drawing
+            var after = before
+            after.strokes += strokes
+            place(after, note: Note(mark: "frame", trigger: trigger, anchor: Self.anchor(box, zoom), zoom: zoom, reading: reading,
+                                    reply: drawing.say, steps: []), replacing: before)
+            remove(bubble)
+        } catch {
+            logger.error("draw failed: \(error.localizedDescription, privacy: .public)")
+            bubble.retry = { [weak self, weak bubble] in
+                guard let bubble else { return }
+                bubble.retry = nil
+                Task { await self?.draw(agent, near, around, reading: reading, threads: threads, trigger: trigger, box: box, zoom: zoom, bubble: bubble) }
+            }
+        }
+    }
+
+    /// A drawing and its note arrive together and leave together, as one step of undo.
+    func place(_ drawing: PKDrawing, note: Note, replacing previous: PKDrawing) {
+        canvas.drawing = drawing
+        notes.append(note)
+        save()
+        canvas.undoManager?.registerUndo(withTarget: self) { marks in
+            marks.canvas.drawing = previous
+            marks.notes.removeAll { $0.id == note.id }
+            marks.save()
+            marks.canvas.undoManager?.registerUndo(withTarget: marks) { $0.place(drawing, note: note, replacing: previous) }
         }
     }
 
@@ -163,7 +220,7 @@ final class Marks {
         let notes = notes, url = page.notesFile
         Store.queue.async {
             do { try JSONEncoder().encode(notes).write(to: url, options: .atomic) }
-            catch { log.error("notes save failed: \(error.localizedDescription, privacy: .public)") }
+            catch { logger.error("notes save failed: \(error.localizedDescription, privacy: .public)") }
         }
     }
 }
