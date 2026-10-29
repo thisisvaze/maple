@@ -11,9 +11,10 @@ final class Marks {
     static let nearPad: CGFloat = 90  // page points of context around the mark in the close-up
     static let maxAsking = 3  // questions in flight at once; more pauses wait for the next one
 
+    /// The agent's blue for dots, bubbles and their text: the ink's blue, and in dark mode the colour PencilKit draws it in.
     static let ink = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0x7F / 255, green: 0xA6 / 255, blue: 0xF0 / 255, alpha: 1)
-        : UIColor(red: 0x2F / 255, green: 0x5D / 255, blue: 0xB8 / 255, alpha: 1) }
+        ? UIColor(red: 0x69 / 255, green: 0x8F / 255, blue: 0xE0 / 255, alpha: 1)
+        : AgentPen.blue }
 
     let canvas: PKCanvasView
     let page: Page
@@ -54,7 +55,7 @@ final class Marks {
     func look() {
         guard let agent, asking < Self.maxAsking else { return }
         let drawing = canvas.drawing, zoom = canvas.zoomScale
-        let recent = drawing.strokes.filter { !AgentPen.wrote($0) }.suffix(12).map { stroke in
+        let recent = drawing.strokes.filter(AgentPen.person).suffix(12).map { stroke in
             let started = stroke.path.creationDate.timeIntervalSince1970
             return Grouping.Stroke(id: Self.id(stroke), bounds: stroke.renderBounds, started: started, ended: started + (stroke.path.last?.timeOffset ?? 0))
         }

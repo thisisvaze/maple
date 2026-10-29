@@ -76,12 +76,19 @@ struct Check {
         near(reopened.center, middle)
         precondition(reopened.rotation == controller.rotation && reopened.canvas.zoomScale == 2)
         coversScreen(reopened)
+        // Maple's ink stays Maple's after a reload, though PencilKit reads it back as another ink type.
+        let reread = reopened.canvas.drawing.strokes
+        precondition(reread.count == 1 && AgentPen.wrote(reread[0]) && !AgentPen.person(reread[0]), "agent ink survives a reload")
+        let older = PKInk(.pen, color: UIColor(red: 0x2F / 255, green: 0x5D / 255, blue: 0xB8 / 255, alpha: 1))
+        precondition(AgentPen.wrote(PKStroke(ink: older, path: reread[0].path)), "pages from before the darker blue")
+        let mine = PKStroke(ink: controller.pen.ink, path: reread[0].path)
+        precondition(!AgentPen.wrote(mine) && AgentPen.person(mine), "the person's pen is theirs")
         controller.undo()
         precondition(canvas.drawing.strokes.isEmpty, "rotation doesn't consume the drawing's undo")
         controller.redo()
         precondition(canvas.drawing.strokes.count == 1, "redo still restores ink")
         controller.saveNow()
-        print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo")
+        print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload")
     }
 
     static func near(_ a: CGPoint, _ b: CGPoint) {
