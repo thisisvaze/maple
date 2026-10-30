@@ -35,7 +35,7 @@ final class Written: UIView {
     func reveal(_ lines: [[CGPoint]], letters: Int) {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         let local = CGAffineTransform(translationX: -block.minX, y: -block.minY)
-        let line = 2.4 / note.zoom  // AgentPen draws 2.4 screen points at the zoom it wrote at
+        let line = AgentPen.thickness / note.zoom  // as thick as AgentPen drew it, at the zoom it wrote at
         let cover = CAShapeLayer(), pen = CAShapeLayer(), ink = CGMutablePath(), paper = CGMutablePath()
         for points in lines where points.count > 1 {
             let path = points.map { $0.applying(local) }

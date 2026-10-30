@@ -40,8 +40,9 @@ enum AgentPen {
     static func person(_ stroke: PKStroke) -> Bool { stroke.ink.inkType == .pen && !wrote(stroke) && !edit(stroke) }
 
     /// Point size for ink drawn at `zoom`. These points render 2 × (size − 2) thick, and nothing at 2 or less (probed,
-    /// 29 Oct), so 2 + 1.2/zoom draws 2.4 points on screen at the zoom it was written at.
-    static func width(at zoom: CGFloat) -> CGFloat { 2 + 1.2 / zoom }  // calibration knob: about as heavy as the person's pen
+    /// 29 Oct), so 2 + thickness / 2 / zoom draws `thickness` points on screen at the zoom it was written at.
+    static let thickness: CGFloat = 1.8  // calibration knob: screen points; Handlee's own strokes are about 1.6 at answer size
+    static func width(at zoom: CGFloat) -> CGFloat { 2 + thickness / 2 / zoom }
 
     /// A stroke through `points`, filled in every `step` so PencilKit's spline smoothing keeps straight lines straight.
     /// Strokes written together share `date`, which is how an answer or a drawing finds its own ink again.
