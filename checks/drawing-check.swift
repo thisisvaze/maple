@@ -1,6 +1,7 @@
-// swiftc -swift-version 6 -parse-as-library Maple/Drawing.swift Maple/Hershey.swift checks/drawing-check.swift -o /tmp/drawing-check && /tmp/drawing-check
+// swiftc -swift-version 6 -parse-as-library Maple/{Drawing,Figure,Computed,Hershey}.swift checks/drawing-check.swift -o /tmp/drawing-check && /tmp/drawing-check
 import CoreGraphics
 import Foundation
+import ImageIO
 
 @main
 struct Check {
@@ -87,6 +88,80 @@ struct Check {
         let labelled = (0 ..< 3).map { n in Drawing.Part(name: "p\(n)", strokes: [], labels: (0 ..< 30).map { Drawing.Label(text: "I", x: CGFloat($0) * 9, y: CGFloat(n) * 20, size: 10) }) }
         let labels = try ink(labelled).count
         precondition(labels == 64, "64 labels: \(labels)")
+                // Formulas take the caller's variables, and two-argument functions.
+        let wave = try Plot.expression("sin(x)*max(y, 2) + atan2(0, 1) + hypot(3, 4)", variables: ["x", "y"])
+        precondition(abs(wave([.pi / 2, 1]) - 7) < 1e-12)
+        for bad in ["z + 1", "max(1)", "atan2(1 2)"] {
+            do { _ = try Plot.expression(bad, variables: ["x"]); preconditionFailure(bad) } catch {}
+        }
+
+        // A figure's ink has true proportions in any box, however Muse's numbers fall, and its labels are measured.
+        func triangle(_ c: String = "5") -> Figure {
+            Figure(points: [.init(name: "A", x: "0", y: "0", label: true), .init(name: "B", x: "ax + 4", y: "0", label: true), .init(name: "C", x: "bx", y: "3", label: true)],
+                   lines: [["A", "B", "C", "A"]],
+                   lengths: [.init(from: "A", to: "B", expected: "4", unit: "cm"), .init(from: "B", to: "C", expected: "3", unit: "cm"), .init(from: "C", to: "A", expected: c, unit: "cm")],
+                   angles: [.init(vertex: "B", from: "A", to: "C", expected: "90")])
+        }
+        for size in [CGSize(width: 300, height: 300), CGSize(width: 640, height: 180), CGSize(width: 150, height: 420)] {
+            let lines = try triangle().lines(in: size, font: .pen), sides = lines.prefix(3).map { hypot($0[1].x - $0[0].x, $0[1].y - $0[0].y) }
+            precondition(abs(sides[0] / sides[1] - 4.0 / 3) < 1e-9 && abs(sides[2] / sides[1] - 5.0 / 3) < 1e-9, "a 3-4-5 triangle stays 3-4-5")
+            precondition(lines.allSatisfy { $0.allSatisfy { CGRect(origin: .zero, size: size).insetBy(dx: -30, dy: -30).contains($0) } }, "it fits its box")
+        }
+        do { try triangle("6").check(); preconditionFailure("a side that doesn't measure up fails") } catch {}
+        var frame = Figure(points: [.init(name: "B", x: "0", y: "0", label: false), .init(name: "S", x: "bx - 50*cos(73*pi/180)", y: "50*sin(73*pi/180)", label: false),
+                                    .init(name: "R", x: "-40", y: "0", label: false)],
+                           lines: [["R", "B", "S"]], circles: [.init(center: "R", radius: "33.4")], angles: [.init(vertex: "B", from: "R", to: "S", expected: "73")])
+        try frame.check()
+        let leaning = try Figure.angle(frame.angles[0], frame.solved())
+        precondition(abs(leaning - 73) < 1e-9, "the seat tube leans at 73 degrees")
+        frame.angles[0].expected = "100"
+        do { try frame.check(); preconditionFailure("an angle that doesn't measure up fails") } catch {}
+        var twice = triangle()
+        twice.points[1].name = "a"
+        do { _ = try twice.solved(); preconditionFailure("a name used twice fails") } catch {}
+
+        // A computed picture is worked out: hydrogen's 1s density is darkest at the nucleus, a wave swings both ways, and the
+        // flow of a rigid turn traces true circles.
+        func pixels(_ png: Data) -> (image: CGImage, bytes: [UInt8]) {
+            let image = CGImageSourceCreateImageAtIndex(CGImageSourceCreateWithData(png as CFData, nil)!, 0, nil)!
+            var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+            CGContext(data: &bytes, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            return (image, bytes)
+        }
+        func colour(_ p: (image: CGImage, bytes: [UInt8]), _ x: Int, _ y: Int) -> [UInt8] { Array(p.bytes[(y * p.image.width + x) * 4 ..< (y * p.image.width + x) * 4 + 3]) }
+        let pictureBox = CGSize(width: 300, height: 200)
+        let hydrogen = pixels(try Computed(field: "exp(-2*sqrt(x^2 + y^2))", xMin: -4, xMax: 4, yMin: -3, yMax: 3).raster(in: pictureBox))
+        precondition(hydrogen.image.width == 600 && hydrogen.image.height == 400)
+        let (centre, edge) = (colour(hydrogen, 300, 200), colour(hydrogen, 4, 4))
+        precondition(centre[2] < 170 && centre[0] < 60 && edge[0] > 240, "darkest at the nucleus, paper far away: \(centre) \(edge)")
+        let swing = pixels(try Computed(field: "sin(x)", xMin: -3.15, xMax: 3.15, yMin: -2, yMax: 2).raster(in: pictureBox))
+        precondition(colour(swing, 150, 200)[0] > 200 && colour(swing, 150, 200)[2] < 90 && colour(swing, 450, 200)[0] < 60, "coral below zero, blue above")
+        _ = try Computed(field: "1/(x^2 + y^2)", xMin: -1, xMax: 1, yMin: -1, yMax: 1).raster(in: pictureBox)  // a singularity is clipped, not fatal
+        do { _ = try Computed(field: "1", xMin: -1, xMax: 1, yMin: -1, yMax: 1).raster(in: pictureBox); preconditionFailure("a flat field has nothing to show") } catch {}
+        let turning = Computed(u: "-y", v: "x", xMin: -5, xMax: 5, yMin: -5, yMax: 5), square = CGSize(width: 300, height: 300)
+        let rings = try turning.lines(in: square, font: .pen).filter { $0.count > 12 }
+        precondition(rings.count > 3, "flow lines: \(rings.count)")
+        for ring in rings {
+            let radii = ring.map { hypot($0.x - 150, $0.y - 150) }
+            precondition(radii.max()! - radii.min()! < 0.05, "a rigid turn's flow lines are circles")
+        }
+        let orbit = Computed(curves: [.init(x: "3*cos(t)", y: "3*sin(t)", tMin: 0, tMax: 6.3)], xMin: -5, xMax: 5, yMin: -5, yMax: 5)
+        let path = try orbit.lines(in: CGSize(width: 600, height: 200), font: .pen)
+        precondition(path.count == 1 && path[0].allSatisfy { abs(hypot($0.x - 300, $0.y - 100) - 60) < 1e-6 }, "one unit is the same size across and up")
+
+        // Pictures have no lines of their own, an old drawing still reads, and an edit swaps a figure whole.
+        let painting = Drawing(reading: "a yard", kind: "picture", say: "a yard in spring", parts: [], plot: .init(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0),
+                               picture: .init(prompt: "a yard in spring", search: false))
+        let unlined = try painting.lines(in: pictureBox)
+        precondition(unlined.isEmpty && painting.painted && !painting.blank)
+        let old = try JSONDecoder().decode(Drawing.self, from: Data(#"{"reading":"r","kind":"ink","say":"s","parts":[],"plot":{"expression":"","xMin":0,"xMax":0,"yMin":0,"yMax":0}}"#.utf8))
+        precondition(old.figure.points.isEmpty && old.computed.empty && old.question.isEmpty && old.blank)
+        var diagram = old
+        diagram.kind = "figure"
+        diagram.figure = triangle()
+        precondition(diagram.patched(parts: [], plot: diagram.plot, say: "", figure: frame).figure == frame && diagram.patched(parts: [], plot: diagram.plot, say: "").figure == triangle())
+
         print("drawing ok")
     }
 }

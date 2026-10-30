@@ -22,6 +22,10 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Maple writes on the page only while the pen rests, so it never cuts a stroke short, and each change undoes on its own without touching the person's later writing
 - [x] App icon: a pencil scribble that straightens into a glowing arrow, a rough thought the AI turns into a direction
 - [x] Empty box: Muse draws in it with the agent's blue pen: a line drawing in named parts with pen-font labels, or a graph the app plots itself; one undo takes it away. While it's drawn, a grey pixel grid shimmers in the box
+- [x] Exact diagrams: when angles and lengths have to be true (a 3-4-5 triangle, a road bike frame), Muse gives each point as an expression in real units. The app works them out, scales the figure evenly into the box and measures every length and angle it labels, so a label can't disagree with the ink. A stated value the points don't meet goes back to Muse once with the reason.
+- [x] Computed pictures: for what physics actually produces (hydrogen's 1s density, two-slit interference, a dipole's field lines, an orbit), Muse gives the equations and the app shades every pixel, traces flow lines with Runge–Kutta and plots curves, at one scale across and up.
+- [x] Pictures: a photo, painting or scene goes to Muse Image at the box's shape (about 10 s, $0.01), under the ink so you can write on it. Pictures save, reload, undo, scratch out and show on page cards. The edit brush repaints one from a copy with your marks on it, changing only what you marked.
+- [x] Asks first: a label with two real meanings, like Mercury alone, gets a question in ink beside the box ("The planet or the element?"). Your next mark in the box or on the question is the reply, and the box fills.
 - [ ] Shared memory the agents read and propose changes to
 
 ## Models
@@ -29,6 +33,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 | Model | Used for |
 |---|---|
 | `muse-spark-1.3` (Meta) | Answering pen or voice questions (with web search and a calculate tool), drawing in a box, and editing ink, all at minimal effort |
+| `muse-image-1.0` (Meta) | Painting a picture in a box, and repainting one from the edit brush's marks; uses the same Meta API key |
 | `muse-voice-transcribe-1.0` (Meta) | Transcribing a recorded question when voice input is enabled; uses the same Meta API key |
 | `jev-1.13.0` (TypeSafe) | The first look at every mark: which gesture it is, in about 0.2 s |
 
@@ -42,12 +47,12 @@ They run on the Mac, without the simulator.
 
 ```sh
 swiftc -swift-version 6 -parse-as-library Maple/Grouping.swift checks/grouping-check.swift -o /tmp/grouping-check && /tmp/grouping-check
-swiftc -swift-version 6 -parse-as-library Maple/Drawing.swift Maple/Hershey.swift checks/drawing-check.swift -o /tmp/drawing-check && /tmp/drawing-check
+swiftc -swift-version 6 -parse-as-library Maple/{Drawing,Figure,Computed,Hershey}.swift checks/drawing-check.swift -o /tmp/drawing-check && /tmp/drawing-check
 swiftc -swift-version 6 -parse-as-library Maple/Hershey.swift Maple/Handwriting.swift checks/handwriting-check.swift -o /tmp/handwriting-check && /tmp/handwriting-check
 swiftc -swift-version 6 -O -parse-as-library Maple/Room.swift checks/room-check.swift -o /tmp/room-check && /tmp/room-check
-swiftc -swift-version 6 -parse-as-library Maple/{Transcribe,Muse,Agent,Drawing,Hershey}.swift checks/voice-check.swift -o /tmp/voice-check && /tmp/voice-check
-swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
-swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
+swiftc -swift-version 6 -parse-as-library Maple/{Transcribe,Muse,Agent,Drawing,Figure,Computed,Hershey}.swift checks/voice-check.swift -o /tmp/voice-check && /tmp/voice-check
+swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Figure,Computed,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
+swiftc -swift-version 6 -parse-as-library Maple/{Muse,MuseImage,Agent,Drawing,Figure,Computed,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
 MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]   # Jev reads marks; Muse answers, draws, edits a drawing and an answer
 ```
 

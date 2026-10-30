@@ -20,18 +20,36 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var labels: [Label]
     }
 
+    /// What Muse Image is asked to paint.
+    struct Picture: Codable, Equatable, Sendable {
+        var prompt = ""
+        var search = false  // the picture depends on what something real looks like, or on current facts
+    }
+
     var reading: String  // what the box's label says
-    var kind: String  // "ink" or "plot"
+    var kind: String  // "ink", "plot", "figure", "computed", "picture", or "ask" when Muse needs to know which is meant
     var say: String  // one line about the drawing, for follow-up questions
     var parts: [Part]
     var plot: Graph
+    var figure = Figure()
+    var computed = Computed()
+    var picture = Picture()
+    var question = ""  // kind ask: what Maple writes beside the box
 
-    /// Pen lines for a box of `size`: a plot's graph, which the app computes itself, and the model's strokes in its parts
-    /// (over a plot, notes on the graph), plus labels in Hershey's pen font. Model output is capped across all its
-    /// parts, clamped into the box, and never executed.
+    /// A picture fills its box, under whatever ink the drawing has.
+    var painted: Bool { kind == "picture" || kind == "computed" && !computed.field.isEmpty }
+
+    /// Pen lines for a box of `size`: what the app computes itself (a plot's graph, a figure, a computed picture's lines)
+    /// and the model's strokes in its parts (over those, notes on them), plus labels in Hershey's pen font. Model output
+    /// is capped across all its parts, clamped into the box, and never executed.
     func lines(in size: CGSize, font: Hershey = .pen) throws -> [[CGPoint]] {
         var lines: [[CGPoint]] = [], labels: [Label] = []
-        if kind == "plot" { (lines, labels) = try Plot.graph(plot, in: size) }
+        switch kind {
+        case "plot": (lines, labels) = try Plot.graph(plot, in: size)
+        case "figure": lines = try figure.lines(in: size, font: font)
+        case "computed": lines = try computed.lines(in: size, font: font)
+        default: break
+        }
         var budget = 12_000  // points
         lines += parts.flatMap(\.strokes).prefix(256).compactMap { stroke in
             let points = stroke.prefix(max(budget, 0)).compactMap { $0.count == 2 && $0.allSatisfy(\.isFinite) ? CGPoint(x: $0[0], y: $0[1]) : nil }
@@ -45,17 +63,18 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         }
         let box = CGRect(origin: .zero, size: size)
         lines = lines.map { $0.map { CGPoint(x: min(max($0.x, box.minX), box.maxX), y: min(max($0.y, box.minY), box.maxY)) } }
-        guard !lines.isEmpty else { throw Plot.Failure("The drawing came back empty") }
+        guard !lines.isEmpty || painted else { throw Plot.Failure("The drawing came back empty") }
         return lines
     }
 
     /// Nothing left to draw: an ink drawing whose parts have no strokes or labels.
-    var blank: Bool { kind != "plot" && parts.allSatisfy { $0.strokes.isEmpty && $0.labels.isEmpty } }
+    var blank: Bool { kind == "ink" && parts.allSatisfy { $0.strokes.isEmpty && $0.labels.isEmpty } }
 
     /// This drawing with an edit's parts patched in by name, trimmed and in any case: a listed part replaces its namesake
     /// or is added, one with no strokes and no labels removes its namesake, and unlisted parts stay as they are. A plot
-    /// with an expression, and a non-empty say, replace their own.
-    func patched(parts: [Part], plot: Graph, say: String) -> Drawing {
+    /// with an expression, a figure with points, a computed picture with something to compute, and a non-empty say,
+    /// replace their own.
+    func patched(parts: [Part], plot: Graph, say: String, figure: Figure = Figure(), computed: Computed = Computed()) -> Drawing {
         func key(_ name: String) -> String { name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         var out = self
         for part in parts {
@@ -69,6 +88,8 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
             }
         }
         if !plot.expression.trimmingCharacters(in: .whitespaces).isEmpty { out.plot = plot }
+        if !figure.points.isEmpty { out.figure = figure }
+        if !computed.empty { out.computed = computed }
         if !say.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.say = say }
         return out
     }
@@ -85,6 +106,10 @@ nonisolated extension Drawing {
         kind = try saved.decode(String.self, forKey: .kind)
         say = try saved.decode(String.self, forKey: .say)
         plot = try saved.decode(Graph.self, forKey: .plot)
+        figure = try saved.decodeIfPresent(Figure.self, forKey: .figure) ?? Figure()
+        computed = try saved.decodeIfPresent(Computed.self, forKey: .computed) ?? Computed()
+        picture = try saved.decodeIfPresent(Picture.self, forKey: .picture) ?? Picture()
+        question = try saved.decodeIfPresent(String.self, forKey: .question) ?? ""
         if saved.contains(.parts) {
             parts = try saved.decode([Part].self, forKey: .parts)
         } else {
@@ -94,9 +119,9 @@ nonisolated extension Drawing {
     }
 }
 
-/// Graphs of y = f(x). The expression is parsed by a small maths grammar (x, numbers, pi, e, + - * / ^, parentheses,
-/// sin cos tan sqrt abs log exp), so a model's formula is never run as code. The model picks the function and ranges;
-/// the app computes every point, because drawn-by-hand curves came out wrong.
+/// Graphs of y = f(x). The expression is parsed by a small maths grammar (numbers, pi, e, + - * / ^, parentheses, the
+/// functions below and the caller's variables), so a model's formula is never run as code. The model picks the function
+/// and ranges; the app computes every point, because drawn-by-hand curves came out wrong.
 nonisolated enum Plot {
     struct Failure: LocalizedError {
         let errorDescription: String?
@@ -104,22 +129,32 @@ nonisolated enum Plot {
     }
 
     static func function(_ source: String) throws -> (Double) -> Double {
-        guard source.count <= 200 else { throw Failure("Expression too long") }
-        let tokens = source.lowercased().matches(of: /(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?|[a-z]+|\S/).map { String($0.output) }
-        let functions: [String: (Double) -> Double] = ["sin": sin, "cos": cos, "tan": tan, "sqrt": { $0.squareRoot() }, "abs": abs, "log": log, "exp": exp]
+        let f = try expression(source, variables: ["x"])
+        return { f([$0]) }
+    }
+
+    /// `source` as a function of `variables`, whose values it takes in that order.
+    static func expression(_ source: String, variables: [String]) throws -> ([Double]) -> Double {
+        guard source.count <= 600 else { throw Failure("Expression too long") }
+        let tokens = source.lowercased().matches(of: /(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?|[a-z][a-z0-9_]*|\S/).map { String($0.output) }
+        let functions: [String: (Double) -> Double] = ["sin": sin, "cos": cos, "tan": tan, "sqrt": { $0.squareRoot() }, "abs": abs, "log": log, "exp": exp,
+                                                       "asin": asin, "acos": acos, "atan": atan, "sinh": sinh, "cosh": cosh, "tanh": tanh]
+        let pairs: [String: (Double, Double) -> Double] = ["atan2": atan2, "min": min, "max": max, "hypot": hypot]
         let powers: [String: Int] = ["+": 1, "-": 1, "*": 2, "/": 2, "^": 3]
         var i = 0
         func next() -> String? { defer { i += 1 }; return i < tokens.count ? tokens[i] : nil }
         func expect(_ token: String) throws { guard next() == token else { throw Failure("Expected \(token)") } }
 
-        func parse(_ least: Int, _ depth: Int) throws -> (Double) -> Double {
+        func parse(_ least: Int, _ depth: Int) throws -> ([Double]) -> Double {
             guard depth < 32 else { throw Failure("Expression too deep") }
-            var left: (Double) -> Double
+            var left: ([Double]) -> Double
             switch next() {
             case "-"?: let operand = try parse(3, depth + 1); left = { -operand($0) }
             case "+"?: left = try parse(3, depth + 1)
             case "("?: left = try parse(0, depth + 1); try expect(")")
-            case "x"?: left = { $0 }
+            case let name? where variables.contains(name):
+                let index = variables.firstIndex(of: name)!
+                left = { $0[index] }
             case "pi"?: left = { _ in .pi }
             case "e"?: left = { _ in M_E }
             case let name? where functions[name] != nil:
@@ -127,6 +162,13 @@ nonisolated enum Plot {
                 let argument = try parse(0, depth + 1), f = functions[name]!
                 try expect(")")
                 left = { f(argument($0)) }
+            case let name? where pairs[name] != nil:
+                try expect("(")
+                let a = try parse(0, depth + 1)
+                try expect(",")
+                let b = try parse(0, depth + 1), f = pairs[name]!
+                try expect(")")
+                left = { f(a($0), b($0)) }
             case let token?:
                 guard let number = Double(token), number.isFinite else { throw Failure("Unsupported \(token)") }
                 left = { _ in number }

@@ -1,8 +1,8 @@
 // Parses a recorded Muse reply, checks Jev's thresholds and the schemas offline, then makes live calls in the app's order
-// (a few cents): Jev reads each mark, and Muse answers a written ? and a double dot, draws in two boxes (a diagram, in
-// named parts, and a graph), and takes two edits: a drawing's button relabelled, and an answer rewritten. The drawings
+// (a few cents): Jev reads each mark, and Muse answers a written ? and a double dot, fills six boxes (a diagram in named
+// parts, a graph, a computed picture, an exact figure, a painted picture, and a question and its reply), and takes two edits: a drawing's button relabelled, and an answer rewritten. The drawings
 // are saved as PNGs to the folder given, or the temporary folder.
-//   swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
+//   swiftc -swift-version 6 -parse-as-library Maple/{Muse,MuseImage,Agent,Drawing,Figure,Computed,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
 //   MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]
 import CoreText
 import Foundation
@@ -96,6 +96,32 @@ struct Check {
             try render(lines, box).write(to: out.appending(path: "box-\(kind).png"))
         }
 
+        // The other ways to fill a box, as Muse chooses them: worked out from the physics, exact, painted, or a question first.
+        for (label, kind) in [("hydrogen atom 1s", "computed"), ("triangle sides 3 4 5", "figure"), ("a yard in spring", "picture"), ("Mercury", "ask")] {
+            start = .now
+            let box = CGSize(width: 360, height: 240), image = boxed(label), drawing = try await agent.draw(near: image, around: image, size: box, threads: [])
+            print("box \(label.debugDescription): \(drawing.kind), say \(drawing.say.debugDescription), question \(drawing.question.debugDescription) in \(start.duration(to: .now))")
+            precondition(drawing.kind == kind, "expected \(kind)")
+            switch kind {
+            case "computed": try drawing.computed.raster(in: box).write(to: out.appending(path: "box-computed.png"))
+            case "figure":
+                try drawing.figure.check()
+                try render(try drawing.lines(in: box, font: font), box).write(to: out.appending(path: "box-figure.png"))
+            case "picture":
+                let painter = MuseImage(key: key)
+                start = .now
+                let painted = try await painter.paint(drawing.picture.prompt, ratio: box, search: drawing.picture.search)
+                precondition(painted.count > 10_000, "a picture comes back")
+                try painted.write(to: out.appending(path: "box-picture.webp"))
+                print("painted \(painted.count / 1024) KB in \(start.duration(to: .now))")
+            default:
+                let reply = picture([("Mercury ", false), ("the planet", true)])
+                let answered = try await agent.draw(near: reply, around: reply, size: box, threads: [], asked: drawing.question)
+                print("replied: \(answered.kind), read \(answered.reading.debugDescription)")
+                precondition(answered.kind != "ask", "Muse asks once")
+            }
+        }
+
         // The edit brush, in red: a circle round a login screen's button and "Log in" beside it change that part only.
         let none = Drawing.Graph(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0), box = CGSize(width: 300, height: 360), corner = CGPoint(x: 60, y: 70)
         func rect(_ r: CGRect) -> [[Double]] { [[r.minX, r.minY], [r.maxX, r.minY], [r.maxX, r.maxY], [r.minX, r.maxY], [r.minX, r.minY]].map { $0.map { Double($0) } } }
@@ -124,7 +150,7 @@ struct Check {
         start = .now
         let drawingEdit = try await agent.edit(near: screen, around: screen, targets: [
             Agent.Target(id: "1", kind: "drawing", at: [120, 140, 600, 720], box: [300, 360], shows: "login screen — \(login.say)",
-                         drawing: .init(kind: login.kind, parts: login.parts, plot: login.plot), marks: marks)])
+                         drawing: .init(kind: login.kind, parts: login.parts, plot: login.plot, figure: login.figure, computed: login.computed, prompt: ""), marks: marks)])
         let parts = drawingEdit.edits.first?.parts ?? []
         print("edit drawing: read \(drawingEdit.reading.debugDescription), edits \(drawingEdit.edits.map { "\($0.target): \($0.parts.map(\.name)) \($0.parts.flatMap(\.labels).map(\.text)) say \($0.say.debugDescription)" }) in \(start.duration(to: .now))")
         precondition(drawingEdit.edits.count == 1 && drawingEdit.edits[0].target == "1" && parts.count == 1

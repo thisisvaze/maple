@@ -3,7 +3,7 @@
 //   sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > "$CHECK_DIR/Colors.swift"
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator -swift-version 6 \
 //     -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{CanvasController,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Grouping,Agent,Muse,Drawing,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{CanvasController,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
@@ -196,6 +196,7 @@ struct Check {
         let c = turned.convert(CGPoint.zero, to: controller.view), d = turned.convert(CGPoint(x: 20, y: 0), to: controller.view)
         precondition(abs(c.y - d.y) < 0.5, "a bubble reads level on screen")
         try await brush()
+        try await boxes()
         try savedHistory()
         try voicePlacement()
         print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame, edit brush")
@@ -662,6 +663,159 @@ struct Check {
         precondition(hypot(a.x - b.x, a.y - b.y) < 0.75, "\(a) != \(b)")  // PencilKit rounds scroll offsets to pixels.
     }
 
+    /// An empty box, filled every way but ink: a painted picture, a computed one, an exact figure, and a question first.
+    static func boxes() async throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = Page(url: folder, edited: .now)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        UserDefaults.standard.set([2150.0, 3100.0, 1.0], forKey: page.viewportKey)
+        let controller = open(page), canvas = controller.canvas, marks = controller.marks!, history = controller.history
+        URLProtocol.registerClass(Offline.self)
+        let agent = Agent(muse: Muse(key: "offline"))
+        marks.agent = agent
+        marks.painter = MuseImage(key: "offline")
+        func ids() -> Set<String> { Set(canvas.drawing.strokes.map(Marks.id)) }
+        func until(_ seconds: Double, _ done: () -> Bool) async throws -> Bool {
+            let end = Date() + seconds
+            while !done(), Date() < end { try await Task.sleep(for: .milliseconds(40)) }
+            return done()
+        }
+        func theirs(_ points: [CGPoint]) -> PKStroke { PKStroke(ink: controller.pen.ink, path: AgentPen.stroke(points, width: 3, step: 2).path) }
+        func drawing(_ kind: String, _ extra: String = "") -> String {
+            #"{"reading": "the label", "kind": "\#(kind)", "say": "it shows this", "parts": [], "plot": {"expression": "", "xMin": 0, "xMax": 0, "yMin": 0, "yMax": 0}\#(extra)}"#
+        }
+        let box = CGRect(x: 2000, y: 3000, width: 300, height: 200), png = Data([0])
+        let frame = theirs([CGPoint(x: 2000, y: 3000), CGPoint(x: 2300, y: 3000), CGPoint(x: 2300, y: 3200), CGPoint(x: 2000, y: 3200), CGPoint(x: 2000, y: 3000)])
+        canvas.drawing.strokes.append(frame)
+        let trigger = [Marks.id(frame)]
+        func fill(asked: Note? = nil, reply: [String] = []) async {
+            await marks.draw(agent, png, png, threads: [], trigger: trigger, box: box, turn: 0, zoom: 1, asked: asked, reply: reply)
+            marks.flush()
+        }
+
+        // A picture lands in one step of undo, under the ink, with no ink of its own.
+        Offline.reply(drawing("picture", #", "picture": {"prompt": "a yard in spring", "search": false}"#))
+        await fill()
+        let painted = marks.notes.last!
+        precondition(painted.mark == "frame" && painted.picture?.hasSuffix(".webp") == true && marks.strokes(of: painted).isEmpty, "a picture has no strokes of its own")
+        precondition(FileManager.default.fileExists(atPath: page.pictures.appending(path: painted.picture!).path), "it's kept with the page")
+        let view = marks.pictures[0]
+        precondition(view.superview === canvas && canvas.subviews.first === view, "under PencilKit's views, so ink shows over it")
+        precondition(!view.isUserInteractionEnabled && view.contentMode == .scaleAspectFill && view.accessibilityLabel == "Picture: it shows this", "the Pencil writes through it")
+        for (turned, zoom) in [(CGFloat(0), CGFloat(0.5)), (0, 2), (.pi / 6, 0.5), (.pi / 6, 2)] {
+            controller.rotation = turned
+            controller.show(CGPoint(x: 2150, y: 3100), zoom: zoom)
+            controller.scrollViewDidZoom(canvas)
+            let corner = view.convert(CGPoint(x: 300, y: 200), to: canvas)
+            near(corner, CGPoint(x: 2300 * zoom, y: 3200 * zoom))
+        }
+        controller.rotation = 0
+        controller.show(CGPoint(x: 2150, y: 3100), zoom: 1)
+        controller.scrollViewDidZoom(canvas)
+        history.undo()
+        precondition(marks.notes.isEmpty && marks.pictures.isEmpty && view.superview == nil, "undo takes it away")
+        history.redo()
+        precondition(marks.notes.count == 1 && marks.pictures.count == 1 && canvas.subviews.first === marks.pictures[0], "redo brings it back, under the ink")
+
+        // A scribble on it finds it, though it has no ink to touch, and takes it away as one step.
+        let scribble = theirs([CGPoint(x: 2100, y: 3100), CGPoint(x: 2150, y: 3120), CGPoint(x: 2110, y: 3130)])
+        canvas.drawing.strokes.append(scribble)
+        precondition(marks.answer(touching: [Marks.id(scribble)])?.id == painted.id, "a mark on a picture touches it")
+        let outside = theirs([CGPoint(x: 2400, y: 3400), CGPoint(x: 2450, y: 3420)])
+        canvas.drawing.strokes.append(outside)
+        precondition(marks.answer(touching: [Marks.id(outside)]) == nil, "a mark beside it doesn't")
+        marks.scratch(painted, [Marks.id(scribble)])
+        marks.flush()
+        precondition(marks.pictures.isEmpty && !ids().contains(Marks.id(scribble)), "scratched out")
+        history.undo()
+        precondition(marks.pictures.count == 1 && ids().contains(Marks.id(scribble)), "and back")
+        history.undo()  // the ink appended here isn't a step; this goes back past the picture
+        history.redo()
+
+        // The edit brush repaints a picture from a copy with the marks on it, in the same box and as one step of undo.
+        canvas.drawing.strokes.removeAll { $0.ink.inkType == .pen && Marks.id($0) != Marks.id(frame) }
+        let edit = #"{"reading": "make it pink", "edits": [{"target": "1", "reply": "", "parts": [], "plot": {"expression": "", "xMin": 0, "xMax": 0, "yMin": 0, "yMax": 0}, "say": "now pink", "repaint": "Make what's in the red ring pink."}]}"#
+        let ring = PKStroke(ink: PKInk(.pen, color: AgentPen.coral), path: AgentPen.stroke([CGPoint(x: 2100, y: 3050), CGPoint(x: 2150, y: 3050), CGPoint(x: 2150, y: 3100), CGPoint(x: 2100, y: 3050)], width: 3.5, step: 2).path)
+        canvas.drawing.strokes.append(ring)
+        let batch = marks.batch([Marks.id(ring)])!
+        precondition(batch.targets.map(\.id) == [painted.id], "a mark in a picture points at it")
+        let copies = try marks.marked(batch.targets[0], batch)
+        precondition(copies.count == 2 && copies[0] != copies[1], "the picture, and a copy with the marks in red")
+        let (_, _, seen) = await marks.request(batch)
+        precondition(seen[0].kind == "picture" && seen[0].drawing?.prompt == "a yard in spring", "Muse knows it as a picture, and its prompt")
+        Offline.reply(edit)
+        marks.edit([Marks.id(ring)])
+        let repainted = try await until(4) { marks.notes.first?.reply == "now pink" || !marks.pending.isEmpty }
+        marks.flush()
+        precondition(repainted, "repainted")
+        precondition(marks.notes.first?.picture != painted.picture && marks.pictures.first?.note.picture == marks.notes.first?.picture && !ids().contains(Marks.id(ring)), "the new picture replaces the old, and the marks go")
+        history.undo()
+        precondition(marks.notes.first?.picture == painted.picture, "undo brings the old picture back")
+        history.redo()
+
+        // It reloads with the page, and shows on its card.
+        controller.saveNow()
+        let reopened = open(page)
+        precondition(reopened.marks.pictures.count == 1 && reopened.canvas.subviews.first === reopened.marks.pictures[0], "a picture comes back with its page")
+        let card = await page.thumbnail(dark: false)
+        precondition(card != nil, "a picture is on the page's card")
+        marks.notes.removeAll()
+        marks.sync()
+
+        // A computed picture is the app's own: a picture from the equations, and ink for its lines.
+        let region = #""xMin": -4, "xMax": 4, "yMin": -3, "yMax": 3"#
+        Offline.reply(drawing("computed", #", "computed": {"field": "exp(-2*sqrt(x^2 + y^2))", "u": "", "v": "", "curves": [{"x": "2*cos(t)", "y": "2*sin(t)", "tMin": 0, "tMax": 6.3}], "labels": [], \#(region)}"#))
+        await fill()
+        let density = marks.notes.last!
+        precondition(density.picture?.hasSuffix(".png") == true && marks.strokes(of: density).count == 1, "a computed picture, and its orbit in ink")
+        precondition(UIImage(contentsOfFile: page.pictures.appending(path: density.picture!).path)?.size == CGSize(width: 600, height: 400), "at 2× its box")
+        history.undo()
+
+        // A figure is all ink, measured by the app; one that doesn't measure up goes back to Muse once, with the reason.
+        let sides = #""points": [{"name": "A", "x": "0", "y": "0", "label": true}, {"name": "B", "x": "4", "y": "0", "label": true}, {"name": "C", "x": "0", "y": "3", "label": true}], "lines": [["A", "B", "C", "A"]], "circles": []"#
+        let wrong = #", "figure": {\#(sides), "lengths": [{"from": "B", "to": "C", "expected": "6", "unit": ""}], "angles": []}"#
+        let right = #", "figure": {\#(sides), "lengths": [{"from": "B", "to": "C", "expected": "5", "unit": "cm"}], "angles": [{"vertex": "A", "from": "B", "to": "C", "expected": "90"}]}"#
+        let asked = Offline.requests
+        Offline.reply(drawing("figure", wrong))
+        Offline.reply(drawing("figure", right))
+        await fill()
+        precondition(Offline.requests == asked + 2, "sent back once")
+        let figure = marks.notes.last!
+        precondition(figure.picture == nil && marks.intact(figure.source!, marks.strokes(of: figure), in: figure.rect), "a figure is ink, and edits like a drawing")
+        history.undo()
+
+        // Two meanings: Maple writes the question beside the box, and the next mark in the box answers it.
+        Offline.reply(drawing("ask", #", "question": "The planet or the element?""#))
+        await fill()
+        let question = marks.notes.last!
+        precondition(question.mark == "ask" && question.reply == "The planet or the element?" && question.asked?.box == box && marks.grids.isEmpty, "asked: \(question)")
+        precondition(!marks.strokes(of: question).isEmpty && question.inked != nil, "in ink beside the box, no bubble")
+        let reply = theirs([CGPoint(x: 2050, y: 3050), CGPoint(x: 2120, y: 3060)])
+        canvas.drawing.strokes.append(reply)
+        let mark = Marks.bounds(reply, turn: 0, zoom: 1)
+        precondition(marks.question(answeredBy: mark, turn: 0, zoom: 1)?.id == question.id, "a mark in its box answers it")
+        precondition(marks.question(answeredBy: CGRect(x: 2900, y: 3900, width: 20, height: 20), turn: 0, zoom: 1) == nil, "a mark elsewhere doesn't")
+        precondition(marks.batch([Marks.id(reply)])?.targets.isEmpty == true, "the edit brush leaves a question alone")
+        let inkBefore = ids()
+        let asking = Offline.requests
+        Offline.reply(drawing("ask", #", "question": "Which?""#))
+        await fill(asked: question, reply: [Marks.id(reply)])  // Muse may not ask twice
+        precondition(Offline.requests == asking + 1 && marks.notes.contains { $0.id == question.id } && marks.bubbles.contains { $0.retry != nil }, "it stops with an orange dot")
+        marks.bubbles.filter { $0.retry != nil }.forEach(marks.remove)
+        Offline.reply(drawing("figure", right))
+        await fill(asked: question, reply: [Marks.id(reply)])
+        precondition(!marks.notes.contains { $0.id == question.id } && marks.notes.last?.mark == "frame", "the box is filled")
+        precondition(!ids().contains(Marks.id(reply)) && ids().isDisjoint(with: Set(marks.strokes(of: question).map(Marks.id))) && inkBefore.subtracting(ids()).count > 1, "the question and the reply go")
+        history.undo()
+        precondition(ids() == inkBefore && marks.notes.contains { $0.id == question.id }, "one step of undo brings them back")
+        print("boxes ok: pictures under ink, aligned, undo, scratching, repainting, reload, cards, computed, figures sent back, questions and replies")
+    }
+
     static var windows: [UIWindow] = []  // a window with no scene lasts only as long as someone holds it
 
     /// The page as it opens, but for its turner: a process with no scene can't convert between windows, so here it sits in
@@ -702,6 +856,13 @@ nonisolated final class Offline: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func stopLoading() {}
     override func startLoading() {
+        guard !request.url!.path.contains("/images/") else {  // Muse Image: a dot of a picture
+            let dot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: ["data": [["b64_json": dot]]]))
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
         let text: String? = Self.lock.withLock {
             Self.served += 1
             return Self.queued.isEmpty ? nil : Self.queued.removeFirst()

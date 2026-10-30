@@ -14,6 +14,7 @@ nonisolated struct Page: Identifiable, Hashable {
     var contentFile: URL { FileManager.default.fileExists(atPath: stateFile.path) ? stateFile : ink }
     var nameFile: URL { url.appending(path: "name.txt") }  // the person's name for it, which Maple never changes
     var autoNameFile: URL { url.appending(path: "auto-name.txt") }  // Maple's, from the ink as it was then
+    var pictures: URL { url.appending(path: "pictures") }  // what Muse Image painted and the app computed, by file name
     var viewportKey: String { "viewport-\(url.lastPathComponent)" }
     var title: String { name ?? "Untitled page" }
     /// Maple names a page again once its ink has changed, until the person names it.
@@ -49,6 +50,15 @@ nonisolated struct Page: Identifiable, Hashable {
     func loadArchive() throws -> History.Archive? {
         guard FileManager.default.fileExists(atPath: stateFile.path) else { return nil }
         return try PropertyListDecoder().decode(History.Archive.self, from: Data(contentsOf: stateFile)).validated()
+    }
+
+    /// Keeps a picture in the page's pictures folder, and gives its file name. Undo may bring it back, so it stays there.
+    // ponytail: files of undone pictures pile up; sweep the ones no note or history step names if pages grow.
+    func keep(_ picture: Data, as kind: String) throws -> String {
+        try FileManager.default.createDirectory(at: pictures, withIntermediateDirectories: true)
+        let name = UUID().uuidString + "." + kind
+        try picture.write(to: pictures.appending(path: name), options: .atomic)
+        return name
     }
 
     /// The person's name for the page; an empty one hands naming back to Maple.
@@ -88,9 +98,23 @@ nonisolated struct Page: Identifiable, Hashable {
         // Never closer than about a screen width, so a single word stays word-sized on its card.
         let width = max(b.width, b.height * Page.aspect, 1032)
         let frame = CGRect(x: b.midX - width / 2, y: b.midY - width / Page.aspect / 2, width: width, height: width / Page.aspect)
-        var image: UIImage?
-        UITraitCollection(userInterfaceStyle: dark ? .dark : .light).performAsCurrent {
-            image = drawing.image(from: frame, scale: 600 / width)  // 600 px wide
+        let scale = 600 / width  // 600 px wide
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let painted = ((try? loadNotes()) ?? []).filter { $0.picture != nil }
+        let image: UIImage? = UIGraphicsImageRenderer(size: CGSize(width: frame.width * scale, height: frame.height * scale), format: format).image { context in
+            context.cgContext.scaleBy(x: scale, y: scale)
+            context.cgContext.translateBy(x: -frame.minX, y: -frame.minY)
+            for note in painted {
+                guard let rect = note.rect, let picture = UIImage(contentsOfFile: pictures.appending(path: note.picture ?? "").path) else { continue }
+                context.cgContext.saveGState()
+                context.cgContext.rotate(by: -(note.turn ?? 0))
+                picture.fill(rect)
+                context.cgContext.restoreGState()
+            }
+            UITraitCollection(userInterfaceStyle: dark ? .dark : .light).performAsCurrent {
+                drawing.image(from: frame, scale: scale).draw(in: frame)
+            }
         }
         try? image?.pngData()?.write(to: cached, options: .atomic)
         return image

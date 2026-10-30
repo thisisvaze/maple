@@ -4,7 +4,7 @@ import Foundation
 /// An answer on the page, saved in the page's notes.json.
 nonisolated struct Note: Codable, Identifiable, Equatable, Sendable {
     var id = UUID().uuidString
-    var mark: String  // "question", "double_dot", "voice", or "frame" for a drawing in a box
+    var mark: String  // "question", "double_dot", "voice", "ask", or "frame" for a drawing in a box
     var trigger: [String]  // ids of the strokes it answers
     var anchor: CGPoint  // page point at the mark's top right, where its dot sits
     var zoom: CGFloat  // the page's zoom when the mark was made; the bubble is sized for it and grows with the page
@@ -15,4 +15,12 @@ nonisolated struct Note: Codable, Identifiable, Equatable, Sendable {
     var rect: CGRect? = nil  // the written block or the drawing's box, in that frame
     var inked: Date? = nil  // the creation date all its strokes share
     var source: Drawing? = nil  // what a drawing was made from
+    var picture: String? = nil  // the file in the page's pictures folder it shows under its ink
+    var asked: Asked? = nil  // for a question Maple asked before filling a box: that box
+
+    /// An empty box, in its own reading frame, which the answer to a question will fill.
+    struct Asked: Codable, Equatable, Sendable {
+        var box: CGRect
+        var turn: CGFloat
+    }
 }

@@ -23,10 +23,7 @@ final class Written: UIView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func place(zoom: CGFloat) {
-        bounds = CGRect(origin: .zero, size: block.size)
-        transform = CGAffineTransform(rotationAngle: -turn).scaledBy(x: zoom, y: zoom)
-        let corner = block.origin.applying(CGAffineTransform(rotationAngle: -turn))
-        center = CGPoint(x: corner.x * zoom, y: corner.y * zoom)
+        pin(to: block, turn: turn, zoom: zoom)
         layer.sublayers?.forEach { $0.contentsScale = traitCollection.displayScale * min(max(zoom, 1), 3) }
     }
 
@@ -65,5 +62,51 @@ final class Written: UIView {
         writing.duration = min(max(Double(letters) * Self.perLetter, 0.9), 2)
         pen.add(writing, forKey: "writing")
         CATransaction.commit()
+    }
+}
+
+/// A picture in a box, under the ink, so the person can write on it. It lives in the canvas's content, level in the frame
+/// the box was drawn in, and grows and shrinks with the page. The Pencil writes through it.
+final class PictureView: UIImageView {
+    let note: Note
+    let block: CGRect, turn: CGFloat
+
+    init(note: Note, file: URL) {
+        self.note = note
+        block = note.rect ?? .zero
+        turn = note.turn ?? 0
+        super.init(image: UIImage(contentsOfFile: file.path))
+        layer.anchorPoint = .zero
+        contentMode = .scaleAspectFill
+        clipsToBounds = true
+        isAccessibilityElement = true
+        accessibilityLabel = "Picture: " + note.reply
+        accessibilityTraits = .image
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func place(zoom: CGFloat) { pin(to: block, turn: turn, zoom: zoom) }
+}
+
+extension UIView {
+    /// Sits over `box`, a rect in the page turned by `turn`, scaled with the page. Its anchor point must be .zero.
+    func pin(to box: CGRect, turn: CGFloat, zoom: CGFloat) {
+        bounds = CGRect(origin: .zero, size: box.size)
+        transform = CGAffineTransform(rotationAngle: -turn).scaledBy(x: zoom, y: zoom)
+        let corner = box.origin.applying(CGAffineTransform(rotationAngle: -turn))
+        center = CGPoint(x: corner.x * zoom, y: corner.y * zoom)
+    }
+}
+
+extension UIImage {
+    /// Draws the picture filling `rect`, cropped evenly to its shape.
+    nonisolated func fill(_ rect: CGRect) {
+        let scale = max(rect.width / size.width, rect.height / size.height)
+        let width = size.width * scale, height = size.height * scale
+        UIGraphicsGetCurrentContext()?.saveGState()
+        UIGraphicsGetCurrentContext()?.clip(to: rect)
+        draw(in: CGRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height))
+        UIGraphicsGetCurrentContext()?.restoreGState()
     }
 }
