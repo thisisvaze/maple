@@ -721,9 +721,19 @@ struct Check {
             let p = drawn[i].location, sideways = min(abs(p.x - left), abs(p.x - right)), upways = min(abs(p.y - top), abs(p.y - bottom))
             precondition(min(sideways, upways) < 0.01, "every point on a side of a true rectangle")
         }
-        precondition(controller.history.canUndo, "a step of undo")
+        // Undo walks back as Procreate's does: to the stroke as it was drawn, then to nothing.
+        let snappedID = Marks.id(canvas.drawing.strokes[0])
         controller.history.undo()
-        precondition(canvas.drawing.strokes.isEmpty, "and undo takes it")
+        let hand = canvas.drawing.strokes
+        precondition(hand.count == 1 && AgentPen.person(hand[0]) && hand[0].path.count >= box.count / 2, "undo brings back the stroke as drawn")
+        precondition(Shape.distance(hand[0].path[0].location, box[0]) < 0.01, "where it was drawn")
+        controller.history.undo()
+        precondition(canvas.drawing.strokes.isEmpty, "and then takes it")
+        controller.history.redo()
+        controller.history.redo()
+        precondition(canvas.drawing.strokes.map(Marks.id) == [snappedID], "redo snaps it again")
+        controller.history.undo()
+        controller.history.undo()
 
         // Writing stays writing, and a stroke not held isn't touched.
         let writing: [CGPoint] = (0..<200).map { (i: Int) -> CGPoint in
@@ -765,7 +775,7 @@ struct Check {
         precondition(canvas.drawing.strokes.count == 1, "one stroke")
 
         // A finger on an oval makes a circle, and the shape lands as it shows.
-        controller.history.undo()
+        while !canvas.drawing.strokes.isEmpty, controller.history.canUndo { controller.history.undo() }
         controller.rotation = 0
         controller.show(controller.center, zoom: 1)
         let oval: [CGPoint] = (0...120).map { (i: Int) -> CGPoint in
@@ -782,6 +792,17 @@ struct Check {
         let circle = canvas.drawing.strokes[0].path, c = Shape.middle((0..<circle.count).map { circle[$0].location })
         let radius = (0..<circle.count).map { Shape.distance(circle[$0].location, c) }
         precondition(radius.max()! - radius.min()! < 1, "a true circle: \(radius.max()! - radius.min()!)")
+        // Undo: circle, then the ellipse it snapped to, then the oval as drawn, then nothing.
+        func spread() -> CGFloat {
+            let p = canvas.drawing.strokes[0].path, d = (0..<p.count).map { Shape.distance(p[$0].location, c) }
+            return d.max()! - d.min()!
+        }
+        controller.history.undo()
+        precondition(canvas.drawing.strokes.count == 1 && spread() > 40, "first the ellipse it snapped to")
+        controller.history.undo()
+        precondition(canvas.drawing.strokes.count == 1 && Shape.distance(canvas.drawing.strokes[0].path[0].location, oval[0]) < 0.01, "then the oval as drawn")
+        controller.history.undo()
+        precondition(canvas.drawing.strokes.isEmpty, "then nothing")
         print("snapping ok: perfect shapes as ink, undo, writing left alone, tremor, dragging, fifteen-degree steps on a turned page, circles")
     }
 

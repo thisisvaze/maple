@@ -167,9 +167,9 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
 
     /// The pen left the paper: a shape lands as ink, and a stroke was PencilKit's all along.
     func lift() {
-        let landed = shape, began = started
+        let landed = shape, base = snapped?.shape, drawn = points, began = started
         clear()
-        if let landed { controller?.place(landed, drawnSince: began) }
+        if let landed, let base { controller?.place(landed, snapped: base, drawn: drawn, drawnSince: began) }
     }
 
     func abandon() { clear() }

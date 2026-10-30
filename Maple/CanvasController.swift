@@ -375,14 +375,25 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         return last.path[last.path.count / 2].size.width
     }
 
-    /// Lays `shape` down as a stroke of the person's own pen, a step of undo, in place of what PencilKit may have kept of the
-    /// stroke it was drawn from. Maple reads it like any mark: a box snapped square is still a box to fill.
-    func place(_ shape: Shape, drawnSince start: Date) {
+    /// Lays a snapped shape down as strokes of the person's own pen, in place of what PencilKit may have kept of the stroke,
+    /// in the steps undo walks back through, like Procreate: the shape as it ends (a circle, a square), the shape as it
+    /// snapped (an ellipse, a rectangle), then the stroke as `drawn`. Maple reads it like any mark: a box snapped square is
+    /// still a box to fill.
+    func place(_ shape: Shape, snapped: Shape, drawn: [CGPoint], drawnSince start: Date) {
         finishStroke()
         let zoom = canvas.zoomScale
-        let stroke = PKStroke(ink: pen.ink, path: AgentPen.stroke(shape.outline(spacing: 2 / zoom), width: inkPoint, step: 2 / zoom, date: start).path)
+        // Each has its own date, so undo tells them apart by id.
+        func ink(_ line: [CGPoint], _ n: Double) -> PKStroke {
+            PKStroke(ink: pen.ink, path: AgentPen.stroke(line, width: inkPoint, step: 2 / zoom, date: start + n / 1000).path)
+        }
         let dropped = canvas.drawing.strokes.filter { AgentPen.person($0) && $0.path.creationDate >= start }.map(Marks.id)
-        marks.apply(Marks.Change(add: [stroke], remove: Set(dropped)))
+        var last = drawn.count > 1 ? ink(drawn, 0) : nil
+        if let last { marks.apply(Marks.Change(add: [last], remove: Set(dropped))) }
+        for (n, form) in [snapped, shape].enumerated() where n == 0 || form != snapped {
+            let next = ink(form.outline(spacing: 2 / zoom), Double(n + 1))
+            marks.apply(Marks.Change(add: [next], remove: last.map { [Marks.id($0)] } ?? Set(dropped)))
+            last = next
+        }
         marks.penUp(writing: true)
     }
 
