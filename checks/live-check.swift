@@ -82,7 +82,7 @@ struct Check {
         precondition(!dots.reply.isEmpty, "a double dot is answered")
 
         let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : NSTemporaryDirectory())
-        let font = Hershey(try String(contentsOfFile: "Maple/futural.jhf", encoding: .ascii))
+        let font = Hershey(traced: try Data(contentsOf: URL(fileURLWithPath: "Maple/hand.json")))
         for (label, kind) in [("water cycle", "ink"), ("y = x^2 - 4", "plot")] {
             start = .now
             let box = CGSize(width: 360, height: 240), image = boxed(label)

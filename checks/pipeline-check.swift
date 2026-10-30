@@ -9,7 +9,7 @@
 //     -swift-version 6 -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
 //     Maple/{Marks,Bubble,Written,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     $S/Colors.swift checks/pipeline-check.swift -o $S/Check.app/pipeline
-//   plutil -create xml1 $S/Check.app/Info.plist; plutil -insert CFBundleIdentifier -string dev.maple.check $S/Check.app/Info.plist; cp Maple/*.jhf $S/Check.app/
+//   plutil -create xml1 $S/Check.app/Info.plist; plutil -insert CFBundleIdentifier -string dev.maple.check $S/Check.app/Info.plist; cp Maple/*.jhf Maple/hand.json $S/Check.app/
 //   SIMCTL_CHILD_MODEL_API_KEY=... SIMCTL_CHILD_TYPESAFE_API_KEY=... xcrun simctl spawn booted $S/Check.app/pipeline $S   # writes the PNGs there
 import PencilKit
 
@@ -83,7 +83,7 @@ struct Check {
         canvas.contentSize = CGSize(width: 4000, height: 4000)
         canvas.contentOffset = CGPoint(x: 600, y: 1400)  // an iPad screen at zoom 1 over page points (600, 1400) to (1420, 2580)
         let marks = Marks(canvas: canvas, page: Page(url: folder, edited: .now), notes: [])
-        let start = Date(timeIntervalSince1970: 2_000_000), cursive = Hershey.bundled("cursive")
+        let start = Date(timeIntervalSince1970: 2_000_000), hand = Hershey.pen
         func brushed(_ lines: [[CGPoint]]) -> [PKStroke] {  // the brush's coral pen, 3 points at zoom 1: points made here draw 2 × (size − 2)
             lines.filter { $0.count > 1 }.map { PKStroke(ink: PKInk(.pen, color: AgentPen.coral), path: AgentPen.stroke($0, width: 3.5, step: 2).path) }
         }
@@ -131,10 +131,10 @@ struct Check {
         // The edit brush's marks, and what Muse would see of them.
         let button = CGPoint(x: box.minX + 150, y: box.minY + 275).applying(page)  // its middle
         let circle = brushed([(0 ... 48).map { CGPoint(x: button.x + 100 * cos(CGFloat($0) * .pi / 24), y: button.y + 44 * sin(CGFloat($0) * .pi / 24)) }])
-        let logIn = brushed(cursive.lines("Log in", at: CGPoint(x: button.x + 125, y: button.y - 30), height: 28))
+        let logIn = brushed(hand.lines("Log in", at: CGPoint(x: button.x + 125, y: button.y - 30), height: 28))
         let strike = brushed([[CGPoint(x: block.minX - 6, y: block.midY + 4), CGPoint(x: block.maxX + 6, y: block.midY - 4)]])
         let plusMinus = brushed(Hershey.bundled("greek").lines("+", at: CGPoint(x: block.minX + 30, y: block.maxY + 14), height: 28)
-                                + cursive.lines("-7", at: CGPoint(x: block.minX + 30, y: block.maxY + 36), height: 28))
+                                + hand.lines("-7", at: CGPoint(x: block.minX + 30, y: block.maxY + 36), height: 28))
         let edits = circle + logIn + strike + plusMinus
         canvas.drawing.strokes += edits
         let area = canvas.drawing.bounds.insetBy(dx: -30, dy: -30)

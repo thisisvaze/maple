@@ -1,8 +1,9 @@
 import CoreGraphics
 import Foundation
 
-/// A Hershey pen face (see Hershey-LICENSE.txt): every glyph is a few pen strokes, so the agent's labels and answers
-/// are written like a pen, as real ink, not typeset. Simplex Sans (futural.jhf) writes the labels in drawings.
+/// A pen face: every glyph is a few pen strokes, so the agent's labels and answers are written like a pen, as real ink,
+/// not typeset. Maple Hand (hand.json, Handlee traced into strokes; see Hand-LICENSE.txt) writes them, and the Hershey
+/// Greek face (greek.jhf, see Hershey-LICENSE.txt) its Greek letters.
 nonisolated struct Hershey: Sendable {
     struct Glyph: Sendable {
         var left, right: CGFloat
@@ -10,10 +11,31 @@ nonisolated struct Hershey: Sendable {
     }
 
     let glyphs: [Glyph]  // ASCII order from the space
-    static let pen = bundled("futural")  // Simplex Sans, for labels in drawings
+    static let pen = traced("hand")  // Maple Hand, for answers and labels in drawings
 
     static func bundled(_ name: String) -> Hershey {
         Hershey(Bundle.main.url(forResource: name, withExtension: "jhf").flatMap { try? String(contentsOf: $0, encoding: .ascii) } ?? "")
+    }
+
+    static func traced(_ name: String) -> Hershey {
+        Hershey(traced: Bundle.main.url(forResource: name, withExtension: "json").flatMap { try? Data(contentsOf: $0) } ?? Data())
+    }
+
+    /// A face traced from a font into strokes, as JSON: each character's advance (`right`) and pen lines, in the same units.
+    /// No glyphs if it can't be read, so nothing is written in a face that isn't there.
+    init(traced json: Data) {
+        struct Face: Decodable {
+            struct Traced: Decodable { var right: CGFloat, lines: [[[CGFloat]]] }
+            var glyphs: [String: Traced]
+        }
+        guard let face = try? JSONDecoder().decode(Face.self, from: json) else {
+            glyphs = []
+            return
+        }
+        glyphs = (32...126).map { code in
+            let g = face.glyphs[String(UnicodeScalar(UInt8(code)))]
+            return Glyph(left: 0, right: g?.right ?? 0, lines: (g?.lines ?? []).map { $0.compactMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil } })
+        }
     }
 
     /// Each glyph is a 5-digit id, a 3-digit pair count, then its letter pairs. Records may wrap across lines.

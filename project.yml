@@ -20,6 +20,7 @@ targets:
         TYPESAFE_API_KEY: $(TYPESAFE_API_KEY)
         NSMicrophoneUsageDescription: Record a spoken question when you squeeze Apple Pencil Pro or tap the microphone. Audio is sent to Meta to transcribe and answer it.
         UILaunchScreen: {}
+        UIAppFonts: [Handlee-Regular.ttf]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations~ipad:

@@ -1,20 +1,19 @@
 import CoreGraphics
 import Foundation
 
-/// An answer written as ink in Hershey pen faces: cursive Latin, the Greek face, and maths signs drawn the same way,
-/// with powers raised and subscripts lowered, word-wrapped to a width. It is written exactly as given or not at all:
-/// `writable` is nil when any character has no glyph, and the app keeps its quiet dot. Sizes are page points; `cap`
-/// is the capital height.
+/// An answer written as ink in pen faces: Maple Hand (Handlee traced into strokes) for Latin, Hershey Greek, and maths
+/// signs drawn the same way, with powers raised and subscripts lowered, word-wrapped to a width. It is written exactly
+/// as given or not at all: `writable` is nil when any character has no glyph, and the app keeps its quiet dot. Sizes are
+/// page points; `cap` is the capital height.
 nonisolated struct Handwriting: Sendable {
     let glyphs: [Character: Hershey.Glyph]  // glyph units: capitals run from y -12 to the baseline at 9
-    static let answers = Handwriting(latin: .bundled("cursive"), greek: .bundled("greek"))
+    static let answers = Handwriting(latin: .pen, greek: .bundled("greek"))
 
     // Proportions, in capitals.
     static let lineGap: CGFloat = 1.6  // calibration knob: from one line's capital top to the next
     static let raise: CGFloat = 0.45, small: CGFloat = 0.62  // calibration knob: a power's baseline lift and size
     static let drop: CGFloat = 0.25  // calibration knob: a subscript's baseline drop; it is `small` too
-    static let space: CGFloat = 0.5  // calibration knob: a word space (the cursive face's is 0.76)
-    static let greekSize: CGFloat = 0.8  // calibration knob: lowercase Greek, to sit with the cursive's small x-height
+    static let greekSize: CGFloat = 0.8  // calibration knob: lowercase Greek, to sit with the hand's x-height
 
     /// Unicode Greek on the Greek face's ASCII positions, laid out like the Symbol font (p is pi), with the maths signs
     /// that are Greek letters: micro, partial, increment, n-ary sum and product. Its only theta is the open ϑ, so θ writes
@@ -68,14 +67,7 @@ nonisolated struct Handwriting: Sendable {
         }
         var glyphs: [Character: Hershey.Glyph] = [:]
         for ascii in UInt8(32) ... 126 { glyphs[Character(UnicodeScalar(ascii))] = glyph(latin, Character(UnicodeScalar(ascii))) }
-        glyphs[" "] = Hershey.Glyph(left: 0, right: Self.space * 21, lines: [])
         glyphs["\u{00A0}"] = glyphs[" "]  // the space in 1 1/2, which wrap keeps
-        glyphs["'"] = glyph(greek, "'") ?? glyphs["'"]  // the cursive tick is lost beside an f, so f′ takes the simplex one
-        for d in "0123456789" {  // the faces set digits 20 wide, so 10 read as 1 0: each is its ink and 3 units a side
-            guard var g = glyphs[d], let x0 = g.lines.joined().map(\.x).min(), let x1 = g.lines.joined().map(\.x).max() else { continue }
-            (g.left, g.right) = (x0 - 3, x1 + 3)
-            glyphs[d] = g
-        }
         for (c, at) in Self.letters { glyphs[c] = glyph(greek, at).map { at.isLowercase ? Self.scaled($0, Self.greekSize) : $0 } }
         for (c, at) in Self.greekSigns { glyphs[c] = glyph(greek, at) }
         for (c, pairs) in Self.signs { glyphs[c] = Hershey.glyph(pairs) }

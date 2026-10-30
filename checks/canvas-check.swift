@@ -7,7 +7,7 @@
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
-//   cp Maple/*.jhf "$CHECK_DIR/Check.app/"
+//   cp Maple/*.jhf Maple/hand.json "$CHECK_DIR/Check.app/"
 //   xcrun simctl spawn booted "$CHECK_DIR/Check.app/canvas-check"
 import PencilKit
 
@@ -477,7 +477,8 @@ struct Check {
         precondition(gone == oldButton, "only the old button's strokes go: \(gone.count) of \(oldButton.count)")
         precondition(came == newButton, "only the new button's strokes come: \(came.count) of \(newButton.count)")
         precondition(rewritten.reply == "x = ±7" && rewritten.inked != answer.inked && !marks.strokes(of: rewritten).isEmpty
-                     && ids().isDisjoint(with: oldAnswer) && rewritten.rect!.origin == block.origin, "the answer, rewritten through Room where it was: \(rewritten.rect!) \(block)")
+                     && ids().isDisjoint(with: oldAnswer) && abs(rewritten.rect!.minX - block.minX) < 0.01 && abs(rewritten.rect!.maxY - block.maxY) < 1,
+                     "the answer, rewritten through Room where it was, on the same line: \(rewritten.rect!) \(block)")
         precondition(ids().isDisjoint(with: [Marks.id(circle), Marks.id(cross)]) && marks.editing.isEmpty, "the marks leave the page")
         let view = marks.written.first { $0.note.id == answer.id }!
         precondition(view.accessibilityLabel == rewritten.reply && view.note.inked == rewritten.inked, "VoiceOver reads the new answer")

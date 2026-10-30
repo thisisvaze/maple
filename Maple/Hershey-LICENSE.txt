@@ -1,5 +1,4 @@
-futural.jhf (Hershey Simplex Sans) is the pen font for the labels in the agent's drawings, and cursive.jhf (Hershey Cursive)
-is the pen face its answers are written in, with greek.jhf (Hershey Greek) for Greek letters and a few maths signs.
+greek.jhf (Hershey Greek) writes the Greek letters and a few maths signs in the agent's answers.
 From https://github.com/kamalmostafa/hershey-fonts, under its Hershey fonts license:
 
  Copyright: 1967 Dr. A. V. Hershey, James Hurt

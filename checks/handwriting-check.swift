@@ -7,14 +7,16 @@ struct Check {
     typealias Run = Handwriting.Run
 
     static func main() throws {
-        func face(_ name: String) throws -> Hershey { Hershey(try String(contentsOfFile: "Maple/\(name).jhf", encoding: .ascii)) }
-        let futural = try face("futural"), cursive = try face("cursive"), greek = try face("greek")
-        precondition([futural, cursive, greek].allSatisfy { $0.glyphs.count == 96 }, "the faces load")
-        let hand = Handwriting(latin: cursive, greek: greek), cap: CGFloat = 12
+        let traced = Hershey(traced: try Data(contentsOf: URL(fileURLWithPath: "Maple/hand.json")))
+        let greek = Hershey(try String(contentsOfFile: "Maple/greek.jhf", encoding: .ascii))
+        precondition(traced.glyphs.count == 95 && greek.glyphs.count == 96, "the faces load")
+        precondition(Hershey(traced: Data()).glyphs.isEmpty && Handwriting(latin: Hershey(traced: Data()), greek: greek).writable("hi") == nil,
+                     "a missing hand writes nothing, so answers stay a quiet dot")
+        let hand = Handwriting(latin: traced, greek: greek), cap: CGFloat = 12
         func ink(_ text: String) -> [[CGPoint]] { hand.pen(hand.wrap(hand.writable(text)!, cap: cap, width: 1000), at: .zero, cap: cap) }
 
         // The period of 2.5 sits on the baseline (y 21 at a 21 capital), not at mid height like a times dot.
-        let labelDot = futural.lines("2.5", at: .zero, height: 21)[futural.lines("2", at: .zero, height: 21).count]
+        let labelDot = traced.lines("2.5", at: .zero, height: 21)[traced.lines("2", at: .zero, height: 21).count]
         let answerDot = hand.pen(["2.5"], at: .zero, cap: 21)[hand.pen(["2"], at: .zero, cap: 21).count]
         for dot in [labelDot, answerDot] {
             precondition(abs(dot.map(\.y).max()! - 21) <= 0.5 && dot.map(\.y).min()! > 17, "the period floats: \(dot)")
@@ -38,7 +40,7 @@ struct Check {
         for text in ["✨ done", "日本", "∮ f dz", "x\u{0304}", "x ∈ ℝ", "ŷ = 2x + 1", "1.5 \u{212B}", "   "] {
             precondition(hand.writable(text) == nil, "\(text) is not writable")
         }
-        let latinOnly = Handwriting(latin: cursive, greek: Hershey(""))  // a bundle without greek.jhf
+        let latinOnly = Handwriting(latin: traced, greek: Hershey(""))  // a bundle without greek.jhf
         precondition(latinOnly.writable("don't") == "don't" && latinOnly.writable("π") == nil && latinOnly.writable("25 ℃") == nil,
                      "without the Greek face, Greek and ° wait")
 
@@ -89,13 +91,11 @@ struct Check {
 
         // The extent is the ink's own (capitals 21 tall, so glyph units): an x starts at the x-height, a g's descender,
         // a root's roof and a second line count.
-        func near(_ r: CGRect, _ x0: CGFloat, _ y0: CGFloat, _ x1: CGFloat, _ y1: CGFloat) -> Bool {
-            [r.minX - x0, r.minY - y0, r.maxX - x1, r.maxY - y1].allSatisfy { abs($0) < 0.01 }
-        }
-        precondition(near(hand.extent(["x"], cap: 21), 0, 12, 16, 21), "x: \(hand.extent(["x"], cap: 21))")
-        precondition(hand.extent(["Hg"], cap: 21).minY == 0 && hand.extent(["Hg"], cap: 21).maxY == 33, "a capital and a descender")
-        precondition(hand.extent(["√2"], cap: 21).minY == -2, "a root's roof reaches above the capitals")
-        precondition(hand.extent(["x", "x"], cap: 21).maxY == 21 * (Handwriting.lineGap + 1), "two lines")
+        let x = hand.extent(["x"], cap: 21), hg = hand.extent(["Hg"], cap: 21)
+        precondition(x.minY > 4 && abs(x.maxY - 21) < 0.5 && x.minX >= 0, "an x stands on the baseline, below the capitals: \(x)")
+        precondition(abs(hg.minY) < 1 && hg.maxY > 25, "a capital reaches the top, a descender drops below the baseline: \(hg)")
+        precondition(hand.extent(["√2"], cap: 21).minY < hg.minY, "a root's roof reaches above the capitals")
+        precondition(abs(hand.extent(["x", "x"], cap: 21).maxY - (21 * Handwriting.lineGap + x.maxY)) < 0.001, "two lines")
         precondition(hand.extent([], cap: cap) == .zero)
         print("handwriting ok")
     }

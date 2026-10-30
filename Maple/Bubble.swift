@@ -33,7 +33,7 @@ final class Bubble: UIView {
         addSubview(orb)
         glass.cornerConfiguration = .uniformCorners(radius: .fixed(14))
         addSubview(glass)
-        label.font = .preferredFont(forTextStyle: .callout)
+        label.font = UIFontMetrics(forTextStyle: .callout).scaledFont(for: UIFont(name: "Handlee-Regular", size: 18) ?? .preferredFont(forTextStyle: .callout))  // the agent's hand
         label.adjustsFontForContentSizeCategory = true
         label.textColor = Marks.ink
         label.numberOfLines = 0

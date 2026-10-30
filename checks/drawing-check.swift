@@ -15,8 +15,8 @@ struct Check {
         }
 
         let box = CGSize(width: 300, height: 200), inside = CGRect(origin: .zero, size: box)
-        let font = Hershey(try String(contentsOfFile: "Maple/futural.jhf", encoding: .ascii))
-        precondition(font.glyphs.count == 96 && !font.lines("y = x", at: .zero, height: 10).isEmpty, "Hershey font")
+        let font = Hershey(traced: try Data(contentsOf: URL(fileURLWithPath: "Maple/hand.json")))
+        precondition(font.glyphs.count == 95 && !font.lines("y = x", at: .zero, height: 10).isEmpty, "the pen face")
 
         // A graph: two axes, then the curve, split at the asymptote of 1/x.
         let sine = try Plot.graph(.init(expression: "sin(x)", xMin: -6.3, xMax: 6.3, yMin: -1.5, yMax: 1.5), in: box)

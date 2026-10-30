@@ -26,6 +26,10 @@
 	<string>Record a spoken question when you squeeze Apple Pencil Pro or tap the microphone. Audio is sent to Meta to transcribe and answer it.</string>
 	<key>TYPESAFE_API_KEY</key>
 	<string>$(TYPESAFE_API_KEY)</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Handlee-Regular.ttf</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
