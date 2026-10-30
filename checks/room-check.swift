@@ -191,6 +191,22 @@ struct Check {
             precondition(degrees != 12 || place(request(long.strokes + longQ.strokes))!.angle == 0, "a level line keeps the screen's frame")
         }
 
+        // Short equations, gentle tilts and descenders still provide a baseline, even on a rotated page.
+        for text in ["x² = 49 ", "2+2 ", "why ", "gypsy jumpy query "] {
+            let words = write(text, x: 200, base: base, h: h), end = write("?", x: words.end, base: base, h: h, mark: true)
+            for degrees: CGFloat in [0, 3, -3, 12, -25, 40] {
+                for pageDegrees: CGFloat in [0, 20] {
+                    let tilted = slanted(words.strokes + end.strokes, degrees, about: CGPoint(x: 200, y: base))
+                    let page = slanted(tilted, pageDegrees, about: .zero)
+                    let answer = place(request(page, turn: pageDegrees * .pi / 180))!
+                    precondition(abs(answer.angle * 180 / .pi - pageDegrees - degrees) < 1,
+                                 "\(text)? at \(degrees)° on a \(pageDegrees)° page squared to \(answer.angle * 180 / .pi)°")
+                }
+            }
+        }
+        let lone = slanted(q.strokes, 12, about: CGPoint(x: 200, y: base))
+        precondition(place(request(lone))!.angle == 0, "a lone question mark cannot establish a baseline")
+
         // A paragraph: a short question line in it, written level, stays level, though a slant across its lines finds a
         // longer band. The whole paragraph written 20° up squares to it.
         let notes = ["the first line of my notes runs on", "and the second line is here too", "", "a fourth line with gypsy jumpy words", "and the last line of it all ends"]
@@ -217,6 +233,13 @@ struct Check {
         let explained = place(dotted)!
         precondition(explained.kind == .nextLine && near(explained.cap, 0.9 * 24) && near(explained.origin.x, wordLine.minX)
             && near(explained.origin.y, wordLine.maxY + 0.5 * 0.9 * 24), "\(explained)")
+
+        // Double dots also follow a short word's baseline.
+        let hello = write("HELLO", x: 150, base: 300, h: 24).strokes
+        for degrees: CGFloat in [3, -12, 25] {
+            let ink = slanted(hello + dots(on: hello[2]), degrees, about: CGPoint(x: 150, y: 300))
+            precondition(abs(place(request(ink, doubleDot: true))!.angle * 180 / .pi - degrees) < 1, "slanted double dot")
+        }
 
         // Written 12 pt tall, with the next line right under it: the band stays the dotted line.
         for spacing: CGFloat in [1.4, 1.6] {

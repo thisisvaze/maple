@@ -51,11 +51,11 @@ nonisolated enum Room {
     // calibration knob: the line band; a stroke joins sharing chainOverlap of the smaller height, chainGap from the band
     static let chainGap: CGFloat = 1.5, chainOverlap: CGFloat = 0.5, bandMax: CGFloat = 25
     // calibration knob: a line long enough to square the frame to, and how many fits find its slant
-    static let squareStrokes = 4, squareSpan: CGFloat = 8, squareTurns = 3
+    static let squareStrokes = 4, squareSpan: CGFloat = 3, squareTurns = 3
     // calibration knob: degrees between the turns tried when the screen's frame finds no slant, and how far (caps, root
     // mean square) the letters of a slant found that way may sit off a straight baseline
     static let sweep: CGFloat = 5, straight: CGFloat = 0.2
-    static let slant: ClosedRange<CGFloat> = 5 ... 45  // calibration knob: degrees of slant the frame squares away
+    static let slant: ClosedRange<CGFloat> = 2 ... 45  // calibration knob: degrees of slant the frame squares away
     static let fitHeight: CGFloat = 0.5  // calibration knob: strokes this tall count in the slant fit; dots and bars sit off the baseline
     static let cell: CGFloat = 0.25, margin: CGFloat = 1, nibClear: CGFloat = 4  // calibration knob: grid cells, the screen edge, the nib
     static let after: CGFloat = 0.6, below: CGFloat = 0.5  // calibration knob: mark to a same-line answer, band to a next-line one
@@ -250,13 +250,15 @@ nonisolated enum Room {
         return Line(mark: mark, band: band, cap: cap, capTop: baseline - cap, bottoms: bottoms, members: members)
     }
 
-    /// The least-squares line through `points`: its angle, and how far off it they sit (root mean square). Nil for fewer
-    /// than two or no spread.
+    /// The median slope between letters resists a descender pulling a short line off level. Spread is the root mean
+    /// square distance from that slope through their center. Nil without any horizontal spread.
     static func tilt(_ points: [CGPoint]) -> (angle: CGFloat, spread: CGFloat)? {
+        let slopes = points.enumerated().flatMap { i, a in
+            points.dropFirst(i + 1).compactMap { b in b.x == a.x ? nil : (b.y - a.y) / (b.x - a.x) }
+        }
+        guard !slopes.isEmpty else { return nil }
         let n = CGFloat(points.count), mx = points.reduce(0) { $0 + $1.x } / n, my = points.reduce(0) { $0 + $1.y } / n
-        let xx = points.reduce(0) { $0 + ($1.x - mx) * ($1.x - mx) }, xy = points.reduce(0) { $0 + ($1.x - mx) * ($1.y - my) }
-        guard points.count > 1, xx > 0 else { return nil }
-        let k = xy / xx, off = points.reduce(0) { $0 + pow($1.y - my - k * ($1.x - mx), 2) }
+        let k = median(slopes), off = points.reduce(0) { $0 + pow($1.y - my - k * ($1.x - mx), 2) }
         return (atan(k), (off / n).squareRoot())
     }
 
