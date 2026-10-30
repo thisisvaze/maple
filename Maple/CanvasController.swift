@@ -1,6 +1,25 @@
 import PencilKit
 import SwiftUI
 
+/// The page's own window, over the app's, which turns it and keeps the paper, the buttons and the alerts level. Only a whole
+/// window hides a turn from PencilKit: a canvas turned on screen any other way, by around 45°, keeps only samples 10 screen
+/// points apart and ink comes out as dots joined by curves, at 51° through a parent view, its own transform or a sublayer
+/// transform alike, against 1.5 here (30 Oct, iPad probes, gaps measured from stored strokes).
+final class Turner: UIWindow {
+    weak var controller: CanvasController?
+
+    override var undoManager: UndoManager? { controller?.undoManager }  // a window would otherwise answer with its own
+
+    /// Touches go through to what sits on the page in the app's window: an alert, its own buttons, the Pages corner. That
+    /// corner goes by position: SwiftUI's window doesn't answer a hit test the same way twice for one touch.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let controller, let page = controller.view, controller.presentedViewController == nil else { return nil }
+        let spot = convert(point, to: page), safe = page.safeAreaInsets
+        let corner = CGRect(x: 0, y: 0, width: safe.left + Marks.pagesButton, height: safe.top + Marks.pagesButton)
+        return page.hitTest(spot, with: event) === page && !corner.contains(spot) ? super.hitTest(point, with: event) : nil
+    }
+}
+
 struct Paper: UIViewControllerRepresentable {
     let page: Page
     var voiceEnabled = false
@@ -25,13 +44,14 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     /// Turns the page; the canvas inside it stays upright. A PKCanvasView carrying a rotation itself drops ink tiles it
     /// still needs while zooming, so a turned page blinked blank mid-pinch (v1, 27 Oct sim film at 76°: 58 frames lost
     /// the ink with the canvas turned, 5 with a turner, 10 with the page straight).
-    let turner = UIView()
+    let turner = Turner()
     let pen = PKInkingTool(.pen, color: .graphite, width: penWidth)
     let toolName = UILabel()  // names the tool for a moment after a double-tap
     var loadError: (any Error)?
     var dirty = false
     var laidOut = false
     var rotation: CGFloat = 0
+    var twist: CGFloat?  // the fingers' last angle on screen, while they turn the page
     var saveTask: Task<Void, Never>?
     var saveErrorShown = false
     let history = UndoManager()
@@ -63,9 +83,10 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         view = UIView()
         view.backgroundColor = .paper  // the paper sits behind a clear canvas, so things can later go between them
         view.clipsToBounds = true
-        turner.frame = view.bounds
-        view.addSubview(turner)
-        canvas.frame = turner.bounds
+        turner.controller = self
+        turner.windowLevel = .normal + 1
+        turner.backgroundColor = .clear  // the paper is in the app's window, under this one
+        turner.isOpaque = false
         turner.addSubview(canvas)
     }
 
@@ -112,8 +133,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         let twist = UIRotationGestureRecognizer(target: self, action: #selector(rotate))
         twist.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
         twist.delegate = self
-        view.addGestureRecognizer(twist)  // its coordinate space stays still while the canvas turns
-        canvas.addInteraction(UIPencilInteraction(delegate: self))
+        turner.addGestureRecognizer(twist)
+        view.addInteraction(UIPencilInteraction(delegate: self))  // in the key window: the Pencil's taps reach no other (30 Oct probe)
         toolName.font = .preferredFont(forTextStyle: .headline)
         toolName.adjustsFontForContentSizeCategory = true
         toolName.alpha = 0
@@ -143,6 +164,14 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         marks.layout()
     }
 
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        turner.windowScene = view.window?.windowScene
+        turner.alpha = 0
+        turner.isHidden = false
+        UIView.animate(withDuration: 0.3) { self.turner.alpha = 1 }  // it can't slide in with the page beneath it
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if let loadError {
@@ -163,6 +192,12 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         voice?.cancel()
         marks.stop()
         saveNow()  // the gallery reads the file next, for the thumbnail
+        UIView.animate(withDuration: 0.2) { self.turner.alpha = 0 }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        turner.isHidden = true
     }
 
     func setVoiceEnabled(_ enabled: Bool) {
@@ -198,14 +233,20 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         guard loadError == nil else { return }
         switch gesture.state {
         case .began, .changed:
+            // Measured on the still screen: gesture.rotation is taken in the window it turns, so it would chase its own turn.
+            guard gesture.numberOfTouches == 2 else { twist = nil; return }
+            let a = gesture.location(ofTouch: 0, in: view), b = gesture.location(ofTouch: 1, in: view), angle = atan2(b.y - a.y, b.x - a.x)
+            defer { twist = angle }
+            guard let twist else { return }
             let pivot = gesture.location(in: view), before = canvas.convert(pivot, from: view)
-            rotation = (rotation + gesture.rotation).remainder(dividingBy: 2 * .pi)
-            gesture.rotation = 0
+            rotation = (rotation + (angle - twist).remainder(dividingBy: 2 * .pi)).remainder(dividingBy: 2 * .pi)
             show(center, zoom: canvas.zoomScale)
             let after = canvas.convert(pivot, from: view)
             canvas.contentOffset.x += before.x - after.x
             canvas.contentOffset.y += before.y - after.y
-        case .ended, .cancelled: save()
+        case .ended, .cancelled:
+            twist = nil
+            save()
         default: break
         }
     }

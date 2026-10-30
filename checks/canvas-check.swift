@@ -24,14 +24,13 @@ struct Check {
         }
         // Pages saved before rotation existed still open at the same center and zoom.
         UserDefaults.standard.set([2000.0, 3000.0, 1.5], forKey: page.viewportKey)
-        let controller = CanvasController(page: page)
-        controller.loadViewIfNeeded()
-        controller.view.bounds.size = CGSize(width: 820, height: 1180)
-        controller.viewDidLayoutSubviews()
+        let controller = open(page)
         near(controller.center, CGPoint(x: 2000, y: 3000))
         precondition(controller.rotation == 0 && controller.canvas.zoomScale == 1.5)
 
         let canvas = controller.canvas, pivot = CGPoint(x: 190, y: 730)
+        precondition(canvas.undoManager === controller.history, "strokes undo in the page, though its canvas has a window of its own")
+        precondition(controller.view.interactions.contains { $0 is UIPencilInteraction }, "the Pencil's taps go to the key window, not the page's")
         let anchor = CGPoint(x: 2000, y: 3000)
         let note = Note(mark: "question", trigger: [], anchor: anchor, zoom: 1.5, reading: "test", reply: "test")
         let drawn = AgentPen.stroke([anchor, CGPoint(x: 2100, y: 3000)], width: 3, step: 2)
@@ -40,13 +39,16 @@ struct Check {
         let ink = canvas.drawing.dataRepresentation()
         let twist = Rotation()
         twist.pivot = pivot
+        controller.rotate(twist)  // the first sight of the fingers turns nothing
+        precondition(controller.rotation == 0)
 
         for delta: CGFloat in [.pi / 4, .pi / 2, -.pi * 7 / 6, .pi * 6] {
             let before = canvas.convert(pivot, from: controller.view)
-            twist.rotation = delta
+            let turned = controller.rotation
+            twist.angle += delta
             controller.rotate(twist)
             near(canvas.convert(pivot, from: controller.view), before)
-            precondition(twist.rotation == 0, "rotation deltas are consumed once")
+            precondition(abs((controller.rotation - turned - delta).remainder(dividingBy: 2 * .pi)) < 0.001, "the page turns as the fingers do")
             coversScreen(controller)
             near(bubble.convert(.zero, to: controller.view), canvas.convert(CGPoint(x: anchor.x * canvas.zoomScale, y: anchor.y * canvas.zoomScale), to: controller.view))
         }
@@ -59,7 +61,7 @@ struct Check {
         controller.canvasViewDidBeginUsingTool(canvas)
         precondition(tiles.allSatisfy { $0.layer.speed == 1 }, "the pen coming down puts PencilKit back at its own pace")
         controller.canvasViewDidEndUsingTool(canvas)
-        let installed = controller.view.gestureRecognizers!.first { $0 is UIRotationGestureRecognizer }!
+        let installed = controller.turner.gestureRecognizers!.first { $0 is UIRotationGestureRecognizer }!
         precondition(installed.delegate === controller)
         precondition(controller.gestureRecognizer(installed, shouldRecognizeSimultaneouslyWith: canvas.panGestureRecognizer))
         precondition(controller.gestureRecognizer(installed, shouldRecognizeSimultaneouslyWith: canvas.pinchGestureRecognizer!))
@@ -78,10 +80,7 @@ struct Check {
         twist.phase = .ended
         controller.rotate(twist)
         controller.saveNow()
-        let reopened = CanvasController(page: page)
-        reopened.loadViewIfNeeded()
-        reopened.view.bounds.size = CGSize(width: 820, height: 1180)
-        reopened.viewDidLayoutSubviews()
+        let reopened = open(page)
         near(reopened.center, middle)
         precondition(reopened.rotation == controller.rotation && reopened.canvas.zoomScale == 2)
         coversScreen(reopened)
@@ -213,10 +212,7 @@ struct Check {
             try? FileManager.default.removeItem(at: folder)
         }
         UserDefaults.standard.set([2000.0, 3000.0, 1.0], forKey: page.viewportKey)
-        let controller = CanvasController(page: page)
-        controller.loadViewIfNeeded()
-        controller.view.bounds.size = CGSize(width: 820, height: 1180)
-        controller.viewDidLayoutSubviews()
+        let controller = open(page)
         let canvas = controller.canvas, marks = controller.marks!
         // Muse, offline: an edit runs its own path, through edit(), request(), Agent.edit and land(), on Offline's replies.
         URLProtocol.registerClass(Offline.self)
@@ -233,7 +229,7 @@ struct Check {
         func theirs(_ points: [CGPoint]) -> PKStroke { PKStroke(ink: controller.pen.ink, path: AgentPen.stroke(points, width: 3, step: 2).path) }
 
         // Double-tapping the Pencil goes pen, eraser, edit brush, pen, naming each at the top of the screen.
-        let pencil = canvas.interactions.compactMap { $0 as? UIPencilInteraction }[0]
+        let pencil = controller.view.interactions.compactMap { $0 as? UIPencilInteraction }[0]
         let tap = class_createInstance(UIPencilInteraction.Tap.self, 0) as! UIPencilInteraction.Tap  // apps may not init one
         func doubleTap() {
             if UIPencilInteraction.preferredTapAction == .ignore { controller.cycle() } else { controller.pencilInteraction(pencil, didReceiveTap: tap) }
@@ -557,6 +553,23 @@ struct Check {
         precondition(hypot(a.x - b.x, a.y - b.y) < 0.75, "\(a) != \(b)")  // PencilKit rounds scroll offsets to pixels.
     }
 
+    static var windows: [UIWindow] = []  // a window with no scene lasts only as long as someone holds it
+
+    /// The page as it opens, but for its turner: a process with no scene can't convert between windows, so here it sits in
+    /// the page, where its center and transform mean the same.
+    static func open(_ page: Page) -> CanvasController {
+        let controller = CanvasController(page: page)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 820, height: 1180))
+        windows.append(window)
+        window.rootViewController = controller
+        window.isHidden = false
+        controller.view.frame = window.bounds
+        controller.view.addSubview(controller.turner)
+        controller.turner.isHidden = false
+        controller.viewDidLayoutSubviews()
+        return controller
+    }
+
     static func coversScreen(_ controller: CanvasController) {
         let screen = controller.view.bounds
         for x in [screen.minX, screen.maxX] {
@@ -597,6 +610,12 @@ nonisolated final class Offline: URLProtocol, @unchecked Sendable {
 final class Rotation: UIRotationGestureRecognizer {
     var phase: UIGestureRecognizer.State = .changed
     var pivot = CGPoint.zero
+    var angle: CGFloat = 0
+    override var numberOfTouches: Int { 2 }
+    override func location(ofTouch touchIndex: Int, in view: UIView?) -> CGPoint {
+        let side: CGFloat = touchIndex == 0 ? 1 : -1
+        return CGPoint(x: pivot.x + side * 60 * cos(angle), y: pivot.y + side * 60 * sin(angle))
+    }
     override var state: UIGestureRecognizer.State {
         get { phase }
         set { phase = newValue }
