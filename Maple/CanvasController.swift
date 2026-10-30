@@ -36,6 +36,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     // On screen, for the edit brush's pen: heavier than penWidth, and handwriting with a 16 pt cap stays legible. PencilKit
     // holds a pen to 0.88–25.7 page points, so it keeps this width from zoom 0.12 to 3.4 (probed, 29 Oct).
     static let editWidth: CGFloat = 3
+    static let straight: CGFloat = .pi / 180  // a page turned less than this counts as straight
     // ponytail: a fixed sheet stands in for an infinite one; recenter the ink if someone ever reaches an edge.
     static let sheet = Page.sheet
 
@@ -238,6 +239,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     func show(_ center: CGPoint, zoom: CGFloat) {
+        Self.pencilShadow(abs(rotation) < Self.straight)
         let turn = CGAffineTransform(rotationAngle: rotation)
         // Cover every screen corner at any angle; resizing a transformed view's frame would distort it.
         turner.bounds.size = view.bounds.applying(turn.inverted()).size
@@ -247,6 +249,16 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         canvas.zoomScale = zoom
         canvas.contentOffset = CGPoint(x: center.x * canvas.zoomScale - canvas.bounds.width / 2,
                                        y: center.y * canvas.zoomScale - canvas.bounds.height / 2)
+    }
+
+    /// PencilKit's hover shadow can't see the page's turn, which is what Turner hides from it, so on a turned page it fell
+    /// away from the Pencil (30 Oct, on the iPad). It's off there; the ink preview at the nib stays. The setting is private:
+    /// found by name, and if it's ever missing, nothing changes.
+    static func pencilShadow(_ on: Bool) {
+        guard let kind = NSClassFromString("PKHoverSettings") as? NSObject.Type, kind.responds(to: NSSelectorFromString("sharedSettings")),
+              let settings = kind.perform(NSSelectorFromString("sharedSettings"))?.takeUnretainedValue() as? NSObject,
+              settings.responds(to: NSSelectorFromString("toolShadowActive")), settings.value(forKey: "toolShadowActive") as? Bool != on else { return }
+        settings.setValue(on, forKey: "toolShadowActive")
     }
 
     @objc func rotate(_ gesture: UIRotationGestureRecognizer) {

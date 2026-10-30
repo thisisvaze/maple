@@ -53,6 +53,16 @@ struct Check {
             near(bubble.convert(.zero, to: controller.view), canvas.convert(CGPoint(x: anchor.x * canvas.zoomScale, y: anchor.y * canvas.zoomScale), to: controller.view))
         }
         precondition(canvas.drawing.dataRepresentation() == ink, "turning the view never rewrites ink")
+        func shadow() -> Bool? {
+            ((NSClassFromString("PKHoverSettings") as? NSObject.Type)?.perform(NSSelectorFromString("sharedSettings"))?.takeUnretainedValue() as? NSObject)?.value(forKey: "toolShadowActive") as? Bool
+        }
+        precondition(abs(controller.rotation) > CanvasController.straight && shadow() == false, "no Pencil shadow on a turned page, where it would fall in the wrong place")
+        let lying = controller.rotation
+        controller.rotation = CanvasController.straight / 2
+        controller.show(controller.center, zoom: canvas.zoomScale)
+        precondition(shadow() == true, "and it's back on a straight one")
+        controller.rotation = lying
+        controller.show(controller.center, zoom: canvas.zoomScale)
         precondition(canvas.transform == .identity && controller.turner.transform != .identity, "the canvas stays upright; its turner turns")
         controller.scrollViewWillBeginZooming(canvas, with: nil)
         func attachment(_ v: UIView) -> UIView? { "\(type(of: v))" == "PKCanvasAttachmentView" ? v : v.subviews.lazy.compactMap(attachment).first }
