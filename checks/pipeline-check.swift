@@ -1,6 +1,8 @@
 // Runs marks through the app's own path on an iPad simulator: PencilKit strokes → Grouping → red crops → Jev → Muse → agent ink.
 // Strokes are letter outlines from a handwriting font: "x² = 49 ?" (its dot last), then "triangle" with an empty box under it.
 // Offline, a known answer is placed by Room and written by Handwriting beside the ?; with keys, Muse's own answer is too.
+// Offline too, an edit: a login drawing and an answer with the edit brush's marks over them, what Muse would see, and the
+// page before and after a canned result lands (edit-*.png, edit-targets.json).
 // It runs inside a bare .app, because PencilKit saves drawing state to preferences and traps without a bundle ID.
 //   S=$(mktemp -d); mkdir $S/Check.app; sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > $S/Colors.swift
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator \
@@ -35,6 +37,7 @@ struct Check {
         let boxed = await crops(label + [box])
         precondition(boxed.trigger == [Marks.id(box)], "the box alone is the mark")
         print("box crops ok")
+        try await edit(to: out)
 
         let env = ProcessInfo.processInfo.environment
         guard let key = env["MODEL_API_KEY"], !key.isEmpty, let jevKey = env["TYPESAFE_API_KEY"], !jevKey.isEmpty else {
@@ -65,6 +68,110 @@ struct Check {
         try page.image(from: boxed.mark.insetBy(dx: -60, dy: -90), scale: 2).pngData()!.write(to: out.appending(path: "box.png"))
         precondition(!ink.isEmpty && ink.allSatisfy { boxed.mark.insetBy(dx: -4, dy: -4).contains($0.renderBounds) }, "the drawing sits inside its box")
         print("pipeline ok: box.png in \(out.path)")
+    }
+
+    /// An edit through the app's own path, offline: Maple's drawing of a login screen, drawn while the page was turned
+    /// 14°, and its answer to a ?; the edit brush's marks over them, made with the page level (a circle round the button
+    /// and "Log in"; a line through the answer and "±7"); what Muse would see of them; and the page before and after a
+    /// canned result lands.
+    static func edit(to out: URL) async throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let screen = UIView(frame: CGRect(x: 0, y: 0, width: 820, height: 1180)), canvas = PKCanvasView(frame: screen.bounds)
+        screen.addSubview(canvas)
+        canvas.contentSize = CGSize(width: 4000, height: 4000)
+        canvas.contentOffset = CGPoint(x: 600, y: 1400)  // an iPad screen at zoom 1 over page points (600, 1400) to (1420, 2580)
+        let marks = Marks(canvas: canvas, page: Page(url: folder, edited: .now), notes: [])
+        let start = Date(timeIntervalSince1970: 2_000_000), cursive = Hershey.bundled("cursive")
+        func brushed(_ lines: [[CGPoint]]) -> [PKStroke] {  // the brush's coral pen, 3 points at zoom 1: points made here draw 2 × (size − 2)
+            lines.filter { $0.count > 1 }.map { PKStroke(ink: PKInk(.pen, color: AgentPen.coral), path: AgentPen.stroke($0, width: 3.5, step: 2).path) }
+        }
+
+        // The person's label and box, and Maple's drawing in it, in parts, all level in the page turned by `turn`.
+        let turn: CGFloat = 0.25, page = CGAffineTransform(rotationAngle: -turn)
+        let box = CGRect(origin: CGPoint(x: 700, y: 1560).applying(page.inverted()), size: CGSize(width: 300, height: 360))
+        let none = Drawing.Graph(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0)
+        func rect(_ r: CGRect) -> [[Double]] { [[r.minX, r.minY], [r.maxX, r.minY], [r.maxX, r.maxY], [r.minX, r.maxY], [r.minX, r.minY]].map { $0.map { Double($0) } } }
+        let signIn = Drawing.Part(name: "sign in button", strokes: [rect(CGRect(x: 70, y: 250, width: 160, height: 50))],
+                                  labels: [Drawing.Label(text: "Sign in", x: 105, y: 268, size: 16)])
+        let login = Drawing(reading: "login screen", kind: "ink", say: "A login screen with email and password fields and a Sign in button", parts: [
+            Drawing.Part(name: "title", strokes: [], labels: [Drawing.Label(text: "Welcome", x: 66, y: 34, size: 24)]),
+            Drawing.Part(name: "email field", strokes: [rect(CGRect(x: 30, y: 100, width: 240, height: 40))], labels: [Drawing.Label(text: "Email", x: 40, y: 114, size: 12)]),
+            Drawing.Part(name: "password field", strokes: [rect(CGRect(x: 30, y: 165, width: 240, height: 40))], labels: [Drawing.Label(text: "Password", x: 40, y: 179, size: 12)]),
+            signIn], plot: none)
+        let label = handwriting("login screen", at: CGPoint(x: 0, y: -30), size: 40, start: start).map { stroke in
+            var turned = stroke
+            turned.transform = CGAffineTransform(translationX: box.minX, y: box.minY).concatenating(page)
+            return turned
+        }
+        var frame = AgentPen.stroke([box.origin, CGPoint(x: box.maxX, y: box.minY), CGPoint(x: box.maxX, y: box.maxY), CGPoint(x: box.minX, y: box.maxY), box.origin].map {
+            $0.applying(page)
+        }, width: 2.5, step: 2)
+        frame.ink = PKInk(.pen, color: .black)
+        let drawnAt = start + 100
+        canvas.drawing = PKDrawing(strokes: label + [frame])
+        marks.apply(.init(add: try Marks.drawn(login, in: box, turn: turn, zoom: 1, date: drawnAt),
+                          notes: [Note(mark: "frame", trigger: [Marks.id(frame)], anchor: Marks.anchor(box, 1).applying(page), zoom: 1, reading: login.reading,
+                                       reply: login.say, turn: turn, rect: box, inked: drawnAt, source: login)]))
+        // A question, answered in ink beside it as Marks.write does.
+        let question = handwriting("x² = 49 ?", at: CGPoint(x: 700, y: 2100), size: 56, start: start + 200)
+        let (trigger, _, _, _) = await crops(question)
+        canvas.drawing.strokes += question
+        let asked = Note(mark: "question", trigger: trigger, anchor: .zero, zoom: 1, reading: "x² = 49 ?", reply: "x = 7", turn: 0)
+        marks.apply(marks.write("x = 7", note: asked, view: (screen: marks.screen, avoid: []), bubble: nil)!)
+        let answer = marks.notes.first { $0.id == asked.id }!, block = answer.rect!
+        func points(_ strokes: [PKStroke]) -> Set<[[CGFloat]]> { Set(strokes.map { $0.path.map { [$0.location.x, $0.location.y] } }) }
+        func written(_ text: String, x: CGFloat) throws -> Set<[[CGFloat]]> {
+            let part = Drawing.Part(name: "", strokes: [], labels: [Drawing.Label(text: text, x: x, y: 268, size: 16)])
+            return points(try Marks.drawn(Drawing(reading: "", kind: "ink", say: "", parts: [part], plot: none), in: box, turn: turn, zoom: 1, date: .now))
+        }
+        let drawing = marks.notes.first { $0.mark == "frame" }!, oldInk = points(marks.strokes(of: drawing))
+
+        // The edit brush's marks, and what Muse would see of them.
+        let button = CGPoint(x: box.minX + 150, y: box.minY + 275).applying(page)  // its middle
+        let circle = brushed([(0 ... 48).map { CGPoint(x: button.x + 100 * cos(CGFloat($0) * .pi / 24), y: button.y + 44 * sin(CGFloat($0) * .pi / 24)) }])
+        let logIn = brushed(cursive.lines("Log in", at: CGPoint(x: button.x + 125, y: button.y - 30), height: 28))
+        let strike = brushed([[CGPoint(x: block.minX - 6, y: block.midY + 4), CGPoint(x: block.maxX + 6, y: block.midY - 4)]])
+        let plusMinus = brushed(Hershey.bundled("greek").lines("+", at: CGPoint(x: block.minX + 30, y: block.maxY + 14), height: 28)
+                                + cursive.lines("-7", at: CGPoint(x: block.minX + 30, y: block.maxY + 36), height: 28))
+        let edits = circle + logIn + strike + plusMinus
+        canvas.drawing.strokes += edits
+        let area = canvas.drawing.bounds.insetBy(dx: -30, dy: -30)
+        func png(_ name: String) throws {
+            var image = UIImage()
+            UITraitCollection(userInterfaceStyle: .light).performAsCurrent { image = canvas.drawing.image(from: area, scale: 2) }
+            try UIGraphicsImageRenderer(size: image.size).pngData { context in
+                UIColor.paper.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).setFill()
+                context.fill(CGRect(origin: .zero, size: image.size))
+                image.draw(at: .zero)
+            }.write(to: out.appending(path: name))
+        }
+        try png("edit-before.png")
+        let batch = marks.batch(Set(edits.map(Marks.id)))!
+        precondition(Set(batch.targets.map(\.id)) == [drawing.id, answer.id], "the marks point at the drawing and the answer")
+        let (near, around, targets) = await marks.request(batch)
+        try near.write(to: out.appending(path: "edit-near.png"))
+        try around.write(to: out.appending(path: "edit-around.png"))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(targets).write(to: out.appending(path: "edit-targets.json"))
+
+        // A canned result lands: the button says Log in, the answer x = ±7, and the marks leave the page.
+        func id(_ note: Note) -> String { String(batch.targets.firstIndex { $0.id == note.id }! + 1) }
+        let result = Agent.Edits(reading: "Log in; x = ±7", edits: [
+            Agent.Edit(target: id(drawing), reply: "", parts: [Drawing.Part(name: "Sign in button", strokes: signIn.strokes,
+                                                                             labels: [Drawing.Label(text: "Log in", x: 112, y: 268, size: 16)])],
+                       plot: none, say: "A login screen with email and password fields and a Log in button"),
+            Agent.Edit(target: id(answer), reply: "x = ±7", parts: [], plot: none, say: "")])
+        try marks.land(result, batch)
+        marks.flush()
+        try png("edit-after.png")
+        let redrawn = marks.notes.first { $0.id == drawing.id }!, rewritten = marks.notes.first { $0.id == answer.id }!
+        let newInk = points(marks.strokes(of: redrawn)), (signed, logged) = (try written("Sign in", x: 105), try written("Log in", x: 112))
+        precondition(oldInk.subtracting(newInk) == signed && newInk.subtracting(oldInk) == logged && redrawn.rect == box, "only the button's label changes")
+        precondition(!canvas.drawing.strokes.contains(where: AgentPen.edit) && rewritten.reply == "x = ±7" && !marks.strokes(of: rewritten).isEmpty, "edited")
+        print("edit ok: edit-before.png, edit-near.png, edit-around.png, edit-targets.json, edit-after.png")
     }
 
     /// Places and writes `reply` beside the mark at the end of `strokes` as Marks.write does, on an iPad screen at zoom 1, and

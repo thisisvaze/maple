@@ -8,17 +8,21 @@ struct Paper: UIViewControllerRepresentable {
 }
 
 /// One page of paper: Apple Pencil writes, two fingers pan, pinch and rotate, two-finger tap undoes, three-finger tap redoes,
-/// and double-tapping the Pencil swaps pen and eraser.
+/// and double-tapping the Pencil goes from pen to eraser to the edit brush and back to the pen.
 final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilInteractionDelegate, UIGestureRecognizerDelegate {
     // Calibration knobs: tune by feel with a real Pencil.
     static let penWidth: CGFloat = 1.8  // fine handwriting
     static let eraserWidth: CGFloat = 41  // on screen; PencilKit clamps to 16.4–80.4 page points
+    // On screen, for the edit brush's pen: heavier than penWidth, and handwriting with a 16 pt cap stays legible. PencilKit
+    // holds a pen to 0.88–25.7 page points, so it keeps this width from zoom 0.12 to 3.4 (probed, 29 Oct).
+    static let editWidth: CGFloat = 3
     // ponytail: a fixed sheet stands in for an infinite one; recenter the ink if someone ever reaches an edge.
     static let sheet: CGFloat = 131_072
 
     let page: Page
     let canvas = PKCanvasView()
     let pen = PKInkingTool(.pen, color: .graphite, width: penWidth)
+    let toolName = UILabel()  // names the tool for a moment after a double-tap
     var loadError: (any Error)?
     var dirty = false
     var laidOut = false
@@ -35,6 +39,12 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     /// The pixel eraser rubs out only what it touches, eraserWidth wide on screen at any zoom.
     var eraser: PKEraserTool { PKEraserTool(.bitmap, width: Self.eraserWidth / canvas.zoomScale) }
+
+    /// The edit brush, a deep-coral pen editWidth wide on screen: what it writes tells Maple what to change on the page.
+    var brush: PKInkingTool { PKInkingTool(.pen, color: AgentPen.coral, width: Self.editWidth / canvas.zoomScale) }
+
+    /// Whether the edit brush is in hand, told by its colour, as its marks are.
+    var brushing: Bool { (canvas.tool as? PKInkingTool).map { AgentPen.edit(PKStroke(ink: $0.ink, path: PKStrokePath())) } ?? false }
 
     init(page: Page) {
         self.page = page
@@ -67,7 +77,12 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         canvas.contentSize = CGSize(width: Self.sheet, height: Self.sheet)
         var notes: [Note] = []
         do {
-            canvas.drawing = try page.load()
+            // Edit marks are instructions, never writing: any left when the page closed go now, and from its file at the next save.
+            var drawing = try page.load()
+            let count = drawing.strokes.count
+            drawing.strokes.removeAll(where: AgentPen.edit)
+            dirty = drawing.strokes.count < count
+            canvas.drawing = drawing
             notes = try page.loadNotes()
         } catch {
             loadError = error  // never save over a file we couldn't read
@@ -90,6 +105,11 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         twist.delegate = self
         view.addGestureRecognizer(twist)  // its coordinate space stays still while the canvas turns
         canvas.addInteraction(UIPencilInteraction(delegate: self))
+        toolName.font = .preferredFont(forTextStyle: .headline)
+        toolName.adjustsFontForContentSizeCategory = true
+        toolName.alpha = 0
+        toolName.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleBottomMargin]
+        view.addSubview(toolName)  // a label takes no touches
         // Resign-active comes before the app switcher can kill us without a background notification.
         NotificationCenter.default.addObserver(self, selector: #selector(saveNow), name: UIApplication.willResignActiveNotification, object: nil)
     }
@@ -177,19 +197,35 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
         guard UIPencilInteraction.preferredTapAction != .ignore else { return }
-        canvas.tool = canvas.tool is PKEraserTool ? pen : eraser
+        cycle()
+    }
+
+    /// Pen, then eraser, then the edit brush, then the pen again, named at the top of the screen for a moment.
+    func cycle() {
+        let (tool, name): (any PKTool, String) = if canvas.tool is PKEraserTool { (brush, "Edit") } else if brushing { (pen, "Pen") } else { (eraser, "Eraser") }
+        canvas.tool = tool
+        toolName.layer.removeAllAnimations()
+        toolName.text = name
+        toolName.textColor = brushing ? AgentPen.coral : .secondaryLabel
+        toolName.sizeToFit()
+        let safe = view.safeAreaLayoutGuide.layoutFrame
+        toolName.frame.origin = CGPoint(x: (safe.midX - toolName.bounds.width / 2).rounded(), y: safe.minY + 12)
+        toolName.alpha = 1
+        UIView.animate(withDuration: 0.3, delay: 1) { self.toolName.alpha = 0 }
+        UIAccessibility.post(notification: .announcement, argument: name)
     }
 
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
-        if canvas.tool is PKEraserTool { canvas.tool = eraser }  // keep its on-screen width
+        // Keep their on-screen widths.
+        if canvas.tool is PKEraserTool { canvas.tool = eraser } else if brushing { canvas.tool = brush }
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) { marks.layout() }
 
-    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { marks.penDown() }
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { marks.penDown(editing: brushing) }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-        marks.penUp(writing: canvas.tool is PKInkingTool)  // erasing isn't a mark
+        marks.penUp(writing: canvas.tool is PKInkingTool, editing: brushing)  // erasing isn't a mark
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
@@ -206,8 +242,10 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         UserDefaults.standard.set([center.x, center.y, canvas.zoomScale, rotation], forKey: page.viewportKey)
         guard dirty, loadError == nil else { return }
         dirty = false
-        let drawing = canvas.drawing, url = page.ink  // copied here, encoded off the main thread
-        Store.queue.async {
+        var drawing = canvas.drawing  // copied here, encoded off the main thread
+        drawing.strokes.removeAll(where: AgentPen.edit)  // edit marks are instructions, never kept
+        let url = page.ink
+        Store.queue.async { [drawing] in
             do {
                 try drawing.dataRepresentation().write(to: url, options: .atomic)
             } catch {

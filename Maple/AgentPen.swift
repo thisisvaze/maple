@@ -16,15 +16,28 @@ enum AgentPen {
     /// The blues Maple has written in: today's, the lighter #2F5DB8 of pages made before 29 Oct, and today's faded.
     static let blues: [SIMD3<Double>] = [[0x1F, 0x45, 0x96], [0x2F, 0x5D, 0xB8], [0xB9, 0xC4, 0xDC]].map { $0 / 255 }
 
-    static func wrote(_ stroke: PKStroke) -> Bool {
+    /// The edit brush's deep coral, #D9481C, which PencilKit stores exactly too and draws as #E35226 on the dark paper
+    /// (probed, 29 Oct): 4.1:1 on the light paper, 4.5:1 on the dark. Its marks tell Maple what to change; they are
+    /// never writing.
+    static let coral = UIColor(red: 0xD9 / 255, green: 0x48 / 255, blue: 0x1C / 255, alpha: 1)
+
+    /// The corals the edit brush has drawn in: today's, and the lighter #FF7F50 of its first marks, 29 Oct.
+    static let corals: [SIMD3<Double>] = [[0xD9, 0x48, 0x1C], [0xFF, 0x7F, 0x50]].map { $0 / 255 }
+
+    static func wrote(_ stroke: PKStroke) -> Bool { inked(stroke, in: blues) }
+
+    /// A mark of the edit brush.
+    static func edit(_ stroke: PKStroke) -> Bool { inked(stroke, in: corals) }
+
+    static func inked(_ stroke: PKStroke, in colours: [SIMD3<Double>]) -> Bool {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         guard stroke.ink.color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return false }
         let rgb = SIMD3<Double>(r, g, b)
-        return blues.contains { (($0 - rgb) * ($0 - rgb)).max() <= 1.0 / 255 / 255 }
+        return colours.contains { (($0 - rgb) * ($0 - rgb)).max() <= 1.0 / 255 / 255 }
     }
 
-    /// The person's own writing: their pen, not Maple's ink.
-    static func person(_ stroke: PKStroke) -> Bool { stroke.ink.inkType == .pen && !wrote(stroke) }
+    /// The person's own writing: their pen, not Maple's ink or the edit brush.
+    static func person(_ stroke: PKStroke) -> Bool { stroke.ink.inkType == .pen && !wrote(stroke) && !edit(stroke) }
 
     /// Point size for ink drawn at `zoom`. These points render 2 × (size − 2) thick, and nothing at 2 or less (probed,
     /// 29 Oct), so 2 + 1.2/zoom draws 2.4 points on screen at the zoom it was written at.

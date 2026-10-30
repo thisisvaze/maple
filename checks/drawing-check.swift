@@ -36,6 +36,57 @@ struct Check {
         let lines = try drawing.lines(in: box, font: font)
         precondition(lines.count >= 3 && lines[1] == [CGPoint(x: 10, y: 10), CGPoint(x: 300, y: 0)], "clamped: \(lines[1])")
         precondition(lines.allSatisfy { $0.allSatisfy { inside.insetBy(dx: -0.01, dy: -0.01).contains($0) } }, "inside, edges included")
+
+        // That JSON is a drawing saved before parts: its strokes and labels are one part, named "drawing".
+        precondition(drawing.parts.count == 1 && drawing.parts[0].name == "drawing" && drawing.parts[0].strokes.count == 2
+                     && drawing.parts[0].labels.map(\.text) == ["A"], "legacy: \(drawing.parts)")
+        // Parts read back as written, and only parts are written.
+        let sorted = JSONEncoder()
+        sorted.outputFormatting = .sortedKeys
+        func encoded(_ value: some Encodable) -> String { String(decoding: try! sorted.encode(value), as: UTF8.self) }
+        let saved = try JSONSerialization.jsonObject(with: try sorted.encode(drawing)) as! [String: Any]
+        precondition(saved["parts"] != nil && saved["strokes"] == nil && saved["labels"] == nil, "writes parts only: \(saved.keys)")
+        let reread = try JSONDecoder().decode(Drawing.self, from: try sorted.encode(drawing))
+        precondition(encoded(reread) == encoded(drawing), "round trip")
+
+        // An edit patches parts by name, trimmed and in any case: it replaces one, adds one, removes one with an empty
+        // part, and leaves the rest. An empty plot expression and say keep their own; others replace them.
+        func part(_ name: String, _ x: Double, label: String? = nil) -> Drawing.Part {
+            Drawing.Part(name: name, strokes: [[[x, 10], [x + 20, 30]]], labels: label.map { [Drawing.Label(text: $0, x: x, y: 40, size: 10)] } ?? [])
+        }
+        let graph = Drawing.Graph(expression: "x", xMin: 0, xMax: 1, yMin: 0, yMax: 1), none = Drawing.Graph(expression: " ", xMin: 0, xMax: 0, yMin: 0, yMax: 0)
+        let login = Drawing(reading: "login", kind: "ink", say: "A login screen", parts: [part("Title", 10), part("Email field", 50), part("Sign In Button", 90, label: "Sign in")], plot: graph)
+        let edited = login.patched(parts: [part(" sign in button ", 95, label: "Log in"), part("forgot link", 130),
+                                           Drawing.Part(name: "EMAIL FIELD", strokes: [], labels: []), Drawing.Part(name: "nothing", strokes: [], labels: [])],
+                                   plot: none, say: "")
+        precondition(edited.parts.map(\.name) == ["Title", " sign in button ", "forgot link"], "patched names: \(edited.parts.map(\.name))")
+        let button = part(" sign in button ", 95, label: "Log in")
+        precondition(encoded(edited.parts[0]) == encoded(login.parts[0]), "the title stays")
+        precondition(encoded(edited.parts[1]) == encoded(button), "the button is replaced")
+        precondition(encoded(edited.plot) == encoded(graph) && edited.say == "A login screen", "an empty plot and say keep their own")
+        let replotted = login.patched(parts: [], plot: Drawing.Graph(expression: "x^2", xMin: -2, xMax: 2, yMin: 0, yMax: 4), say: "A parabola")
+        precondition(replotted.plot.expression == "x^2" && replotted.plot.xMin == -2 && replotted.say == "A parabola" && encoded(replotted.parts) == encoded(login.parts),
+                     "a plot and say replace their own; parts stay")
+        precondition(login.patched(parts: login.parts.map { Drawing.Part(name: $0.name, strokes: [], labels: []) }, plot: none, say: "").blank, "all gone")
+        precondition(!Drawing(reading: "", kind: "plot", say: "", parts: [], plot: graph).blank, "a plot draws itself")
+        // A plot draws its parts over the graph: what an edit marks on it, like its roots.
+        let parabola = Drawing(reading: "", kind: "plot", say: "", parts: [], plot: .init(expression: "x^2 - 4", xMin: -3, xMax: 3, yMin: -5, yMax: 6))
+        let roots = Drawing.Part(name: "roots", strokes: [[[96, 150], [104, 158]]], labels: [Drawing.Label(text: "I", x: 90, y: 162, size: 10)])
+        let (bare, marked) = (try parabola.lines(in: box, font: font), try parabola.patched(parts: [roots], plot: none, say: "").lines(in: box, font: font))
+        precondition(marked.count == bare.count + 2 && marked.contains([CGPoint(x: 96, y: 150), CGPoint(x: 104, y: 158)]), "a plot's parts: \(bare.count) \(marked.count)")
+
+        // The caps hold across all parts together: 256 strokes, 12000 points, 64 labels.
+        let many = (0 ..< 3).map { Drawing.Part(name: "p\($0)", strokes: Array(repeating: [[0, 0], [10, 10]], count: 100), labels: []) }
+        func ink(_ parts: [Drawing.Part]) throws -> [[CGPoint]] { try Drawing(reading: "", kind: "ink", say: "", parts: parts, plot: graph).lines(in: box, font: font) }
+        let strokes = try ink(many).count
+        precondition(strokes == 256, "256 strokes: \(strokes)")
+        let long = (0 ..< 2).map { Drawing.Part(name: "p\($0)", strokes: [(0 ..< 7000).map { [Double($0 % 300), 1] }], labels: []) }
+        let points = try ink(long).joined().count
+        precondition(points == 12_000, "12000 points: \(points)")
+        precondition(font.lines("I", at: .zero, height: 10).count == 1, "an I is one line")
+        let labelled = (0 ..< 3).map { n in Drawing.Part(name: "p\(n)", strokes: [], labels: (0 ..< 30).map { Drawing.Label(text: "I", x: CGFloat($0) * 9, y: CGFloat(n) * 20, size: 10) }) }
+        let labels = try ink(labelled).count
+        precondition(labels == 64, "64 labels: \(labels)")
         print("drawing ok")
     }
 }

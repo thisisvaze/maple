@@ -13,28 +13,32 @@ nonisolated struct Drawing: Codable, Sendable {
         var xMin, xMax, yMin, yMax: Double
     }
 
+    /// One thing a person might point at and ask to change: a button, a field, the title, an arrow, an axis.
+    struct Part: Codable, Sendable {
+        var name: String
+        var strokes: [[[Double]]]
+        var labels: [Label]
+    }
+
     var reading: String  // what the box's label says
     var kind: String  // "ink" or "plot"
     var say: String  // one line about the drawing, for follow-up questions
-    var strokes: [[[Double]]]
-    var labels: [Label]
+    var parts: [Part]
     var plot: Graph
 
-    /// Pen lines for a box of `size`: the model's strokes, or a graph the app computes itself, plus labels in Hershey's
-    /// pen font. Model output is capped and clamped into the box, and never executed.
+    /// Pen lines for a box of `size`: a plot's graph, which the app computes itself, and the model's strokes in its parts
+    /// (over a plot, notes on the graph), plus labels in Hershey's pen font. Model output is capped across all its
+    /// parts, clamped into the box, and never executed.
     func lines(in size: CGSize, font: Hershey = .pen) throws -> [[CGPoint]] {
-        var lines: [[CGPoint]], labels: [Label]
-        if kind == "plot" {
-            (lines, labels) = try Plot.graph(plot, in: size)
-        } else {
-            var budget = 12_000  // points
-            lines = strokes.prefix(256).compactMap { stroke in
-                let points = stroke.prefix(max(budget, 0)).compactMap { $0.count == 2 && $0.allSatisfy(\.isFinite) ? CGPoint(x: $0[0], y: $0[1]) : nil }
-                budget -= points.count
-                return points.count > 1 ? points : nil
-            }
-            labels = self.labels
+        var lines: [[CGPoint]] = [], labels: [Label] = []
+        if kind == "plot" { (lines, labels) = try Plot.graph(plot, in: size) }
+        var budget = 12_000  // points
+        lines += parts.flatMap(\.strokes).prefix(256).compactMap { stroke in
+            let points = stroke.prefix(max(budget, 0)).compactMap { $0.count == 2 && $0.allSatisfy(\.isFinite) ? CGPoint(x: $0[0], y: $0[1]) : nil }
+            budget -= points.count
+            return points.count > 1 ? points : nil
         }
+        labels += parts.flatMap(\.labels)
         for label in labels.prefix(64) where [label.x, label.y, label.size].allSatisfy(\.isFinite) {
             let text = String(label.text.prefix(80))
             lines += font.lines(text, at: CGPoint(x: label.x, y: label.y), height: min(max(label.size, 4), 48))
@@ -43,6 +47,50 @@ nonisolated struct Drawing: Codable, Sendable {
         lines = lines.map { $0.map { CGPoint(x: min(max($0.x, box.minX), box.maxX), y: min(max($0.y, box.minY), box.maxY)) } }
         guard !lines.isEmpty else { throw Plot.Failure("The drawing came back empty") }
         return lines
+    }
+
+    /// Nothing left to draw: an ink drawing whose parts have no strokes or labels.
+    var blank: Bool { kind != "plot" && parts.allSatisfy { $0.strokes.isEmpty && $0.labels.isEmpty } }
+
+    /// This drawing with an edit's parts patched in by name, trimmed and in any case: a listed part replaces its namesake
+    /// or is added, one with no strokes and no labels removes its namesake, and unlisted parts stay as they are. A plot
+    /// with an expression, and a non-empty say, replace their own.
+    func patched(parts: [Part], plot: Graph, say: String) -> Drawing {
+        func key(_ name: String) -> String { name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        var out = self
+        for part in parts {
+            let same = out.parts.firstIndex { key($0.name) == key(part.name) }
+            if part.strokes.isEmpty, part.labels.isEmpty {
+                if let same { out.parts.remove(at: same) }
+            } else if let same {
+                out.parts[same] = part
+            } else {
+                out.parts.append(part)
+            }
+        }
+        if !plot.expression.trimmingCharacters(in: .whitespaces).isEmpty { out.plot = plot }
+        if !say.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.say = say }
+        return out
+    }
+}
+
+nonisolated extension Drawing {
+    /// A drawing saved before parts kept its strokes and labels at the top.
+    private enum Legacy: String, CodingKey { case strokes, labels }
+
+    /// Reads parts, or a drawing saved before them as one part named "drawing". Here, so the memberwise init stays.
+    init(from decoder: any Decoder) throws {
+        let saved = try decoder.container(keyedBy: CodingKeys.self)
+        reading = try saved.decode(String.self, forKey: .reading)
+        kind = try saved.decode(String.self, forKey: .kind)
+        say = try saved.decode(String.self, forKey: .say)
+        plot = try saved.decode(Graph.self, forKey: .plot)
+        if saved.contains(.parts) {
+            parts = try saved.decode([Part].self, forKey: .parts)
+        } else {
+            let old = try decoder.container(keyedBy: Legacy.self)
+            parts = [Part(name: "drawing", strokes: try old.decode([[[Double]]].self, forKey: .strokes), labels: try old.decode([Label].self, forKey: .labels))]
+        }
     }
 }
 
@@ -108,7 +156,7 @@ nonisolated enum Plot {
         guard [g.xMin, g.xMax, g.yMin, g.yMax].allSatisfy({ $0.isFinite && abs($0) <= 1e6 }), g.xMax > g.xMin, g.yMax > g.yMin else { throw Failure("Invalid graph ranges") }
         guard size.width >= 80, size.height >= 60 else { throw Failure("Draw a larger box for a graph") }
         let f = try function(g.expression)
-        let w = size.width, h = size.height, pad = 0.12
+        let w = size.width, h = size.height, pad = 0.12  // Agent.editInstructions tells Muse this, to mark points on a plot
         func px(_ x: Double) -> CGFloat { w * (pad + (1 - 2 * pad) * (x - g.xMin) / (g.xMax - g.xMin)) }
         func py(_ y: Double) -> CGFloat { h * (1 - pad - (1 - 2 * pad) * (y - g.yMin) / (g.yMax - g.yMin)) }
         let axisX = px(min(max(0, g.xMin), g.xMax)), axisY = py(min(max(0, g.yMin), g.yMax))

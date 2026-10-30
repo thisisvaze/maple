@@ -1,6 +1,7 @@
-// Parses a recorded Muse reply and checks Jev's thresholds offline, then makes live calls in the app's order (a few
-// cents): Jev reads each mark, and Muse answers a written ? and a double dot, and draws in two boxes (a diagram and a
-// graph), saved as PNGs to the folder given, or the temporary folder.
+// Parses a recorded Muse reply, checks Jev's thresholds and the schemas offline, then makes live calls in the app's order
+// (a few cents): Jev reads each mark, and Muse answers a written ? and a double dot, draws in two boxes (a diagram, in
+// named parts, and a graph), and takes two edits: a drawing's button relabelled, and an answer rewritten. The drawings
+// are saved as PNGs to the folder given, or the temporary folder.
 //   swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
 //   MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]
 import CoreText
@@ -30,6 +31,8 @@ struct Check {
         precondition(Jev.decide("frame", ["frame": 0.8], confirmedQuestion: 0) == "frame", "a sure box")
         precondition(Jev.decide("frame", ["frame": 0.6], confirmedQuestion: 0) == "writing", "an unsure box")
         print("thresholds ok")
+        for schema in [Agent.schema, Agent.drawSchema, Agent.editSchema] { _ = try JSONSerialization.jsonObject(with: schema) }
+        print("schemas ok")
 
         let env = ProcessInfo.processInfo.environment
         guard let key = env["MODEL_API_KEY"], !key.isEmpty, let jevKey = env["TYPESAFE_API_KEY"], !jevKey.isEmpty else {
@@ -75,11 +78,90 @@ struct Check {
             precondition(mark == "frame", "an empty box under \(label) is a frame: \(mark)")
             let drawing = try await agent.draw(near: image, around: image, size: box, threads: [])
             let lines = try drawing.lines(in: box, font: font)
-            print("box \(label.debugDescription): \(drawing.kind), \(lines.count) lines, say \(drawing.say.debugDescription) in \(start.duration(to: .now))")
+            print("box \(label.debugDescription): \(drawing.kind), \(lines.count) lines in parts \(drawing.parts.map(\.name)), say \(drawing.say.debugDescription) in \(start.duration(to: .now))")
             precondition(drawing.kind == kind, "expected \(kind)")
+            precondition(kind == "plot" || drawing.parts.count > 1 && drawing.parts.allSatisfy { !$0.name.isEmpty }, "drawn in named parts")
             try render(lines, box).write(to: out.appending(path: "box-\(kind).png"))
         }
-        print("live ok: drawings in \(out.path)")
+
+        // The edit brush, in red: a circle round a login screen's button and "Log in" beside it change that part only.
+        let none = Drawing.Graph(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0), box = CGSize(width: 300, height: 360), corner = CGPoint(x: 60, y: 70)
+        func rect(_ r: CGRect) -> [[Double]] { [[r.minX, r.minY], [r.maxX, r.minY], [r.maxX, r.maxY], [r.minX, r.maxY], [r.minX, r.minY]].map { $0.map { Double($0) } } }
+        let button = CGRect(x: 70, y: 250, width: 160, height: 50)
+        let login = Drawing(reading: "login screen", kind: "ink", say: "A login screen with email and password fields and a Sign in button", parts: [
+            Drawing.Part(name: "title", strokes: [], labels: [Drawing.Label(text: "Welcome", x: 66, y: 34, size: 24)]),
+            Drawing.Part(name: "email field", strokes: [rect(CGRect(x: 30, y: 100, width: 240, height: 40))], labels: [Drawing.Label(text: "Email", x: 40, y: 114, size: 12)]),
+            Drawing.Part(name: "password field", strokes: [rect(CGRect(x: 30, y: 165, width: 240, height: 40))], labels: [Drawing.Label(text: "Password", x: 40, y: 179, size: 12)]),
+            Drawing.Part(name: "sign in button", strokes: [rect(button)], labels: [Drawing.Label(text: "Sign in", x: 105, y: 268, size: 16)])], plot: none)
+        let ink = try login.lines(in: box, font: font), red = CGColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1)
+        var said = CGRect.null
+        let screen = closeUp(CGSize(width: 500, height: 500)) { context in
+            _ = write("login screen", at: CGPoint(x: 60, y: 58), size: 28, color: CGColor(gray: 0.1, alpha: 1), in: context)
+            context.setLineWidth(1.2)
+            context.setStrokeColor(gray: 0.1, alpha: 1)
+            context.stroke(CGRect(origin: corner, size: box))
+            context.setStrokeColor(CGColor(red: 0x1F / 255, green: 0x45 / 255, blue: 0x96 / 255, alpha: 1))
+            for line in ink { context.addLines(between: line.map { CGPoint(x: corner.x + $0.x, y: corner.y + $0.y) }) }
+            context.strokePath()
+            context.setStrokeColor(red)
+            context.setLineWidth(2.4)
+            context.strokeEllipse(in: button.insetBy(dx: -20, dy: -17).offsetBy(dx: corner.x, dy: corner.y))
+            said = write("Log in", at: CGPoint(x: 372, y: 356), size: 30, color: red, in: context)
+        }
+        let marks = [button.insetBy(dx: -20, dy: -17), said.offsetBy(dx: -corner.x, dy: -corner.y)].map { [$0.minX, $0.minY, $0.width, $0.height].map { Double($0.rounded()) } }
+        start = .now
+        let drawingEdit = try await agent.edit(near: screen, around: screen, targets: [
+            Agent.Target(id: "1", kind: "drawing", at: [120, 140, 600, 720], box: [300, 360], shows: "login screen — \(login.say)",
+                         drawing: .init(kind: login.kind, parts: login.parts, plot: login.plot), marks: marks)])
+        let parts = drawingEdit.edits.first?.parts ?? []
+        print("edit drawing: read \(drawingEdit.reading.debugDescription), edits \(drawingEdit.edits.map { "\($0.target): \($0.parts.map(\.name)) \($0.parts.flatMap(\.labels).map(\.text)) say \($0.say.debugDescription)" }) in \(start.duration(to: .now))")
+        precondition(drawingEdit.edits.count == 1 && drawingEdit.edits[0].target == "1" && parts.count == 1
+                     && parts[0].name.trimmingCharacters(in: .whitespaces).lowercased() == "sign in button"
+                     && parts[0].labels.contains { $0.text.lowercased().contains("log in") }, "the button part only, now Log in")
+        let patched = login.patched(parts: parts, plot: drawingEdit.edits[0].plot, say: drawingEdit.edits[0].say)
+        try screen.write(to: out.appending(path: "edit-near.png"))
+        try render(try patched.lines(in: box, font: font), box).write(to: out.appending(path: "edit-drawing.png"))
+
+        // ... and "both roots" under an answer rewrites it.
+        var answer = CGRect.null
+        let page = closeUp(CGSize(width: 500, height: 250)) { context in
+            _ = write("x² = 49 ?", at: CGPoint(x: 20, y: 110), size: 40, color: CGColor(gray: 0.1, alpha: 1), in: context)
+            answer = write("x = 7", at: CGPoint(x: 230, y: 110), size: 40, color: CGColor(red: 0x1F / 255, green: 0x45 / 255, blue: 0x96 / 255, alpha: 1), in: context)
+            _ = write("both roots", at: CGPoint(x: 230, y: 180), size: 34, color: red, in: context)
+        }
+        start = .now
+        let answerEdit = try await agent.edit(near: page, around: page, targets: [
+            Agent.Target(id: "1", kind: "answer", at: [answer.minX, answer.minY, answer.width, answer.height].map { Double(($0 * 2).rounded()) },
+                         question: "x² = 49 ?", answer: "x = 7")])
+        print("edit answer: read \(answerEdit.reading.debugDescription), edits \(answerEdit.edits.map { "\($0.target): \($0.reply.debugDescription)" }) in \(start.duration(to: .now))")
+        precondition(answerEdit.edits.count == 1 && answerEdit.edits[0].target == "1" && ["-7", "−7", "±7", "± 7"].contains { answerEdit.edits[0].reply.contains($0) },
+                     "the answer, rewritten with both roots")
+        print("live ok: drawings and edits in \(out.path)")
+    }
+
+    /// A close-up at 2× of `size` points, y down, drawn by `draw` on white, as a PNG.
+    static func closeUp(_ size: CGSize, _ draw: (CGContext) -> Void) -> Data {
+        let context = CGContext(data: nil, width: Int(size.width * 2), height: Int(size.height * 2), bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: size.width * 2, height: size.height * 2))
+        context.translateBy(x: 0, y: size.height * 2)
+        context.scaleBy(x: 2, y: -2)
+        context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)  // text upright in the y-down points
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        draw(context)
+        return png(context)
+    }
+
+    /// Writes `text` by hand in `color`, its baseline starting at `at` in a close-up's points, and returns its box there.
+    static func write(_ text: String, at: CGPoint, size: CGFloat, color: CGColor, in context: CGContext) -> CGRect {
+        let font = CTFontCreateWithName("Bradley Hand" as CFString, size, nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.init(kCTFontAttributeName as String): font, .init(kCTForegroundColorAttributeName as String): color]))
+        context.textPosition = at
+        CTLineDraw(line, context)
+        let bounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)  // y up from the baseline
+        return CGRect(x: at.x + bounds.minX, y: at.y - bounds.maxY, width: bounds.width, height: bounds.height)
     }
 
     /// A handwritten label with an empty red box under it, as the close-up shows a new box.
