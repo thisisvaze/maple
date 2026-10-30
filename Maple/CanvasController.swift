@@ -246,12 +246,18 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         UIAccessibility.post(notification: .announcement, argument: name)
     }
 
-    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
-        // Keep their on-screen widths.
-        if canvas.tool is PKEraserTool { canvas.tool = eraser } else if brushing { canvas.tool = brush }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        marks.layout()
+        fitTool()
     }
 
-    func scrollViewDidZoom(_ scrollView: UIScrollView) { marks.layout() }
+    /// Keeps the eraser and the edit brush their width on screen at every zoom. Their widths are in page points, so one
+    /// made zoomed out grows with the page zoomed in: an eraser could fill the screen. Fitted on every zoom change, not
+    /// just when a pinch ends, since a twist sets the zoom mid-pinch and that end can be skipped.
+    func fitTool() {
+        if let tool = canvas.tool as? PKEraserTool, abs(tool.width - eraser.width) > 0.25 { canvas.tool = eraser }
+        else if brushing, let tool = canvas.tool as? PKInkingTool, abs(tool.width - brush.width) > 0.05 { canvas.tool = brush }
+    }
 
     func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { instantTiles() }  // PencilKit may have made a new one
 

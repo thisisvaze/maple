@@ -244,14 +244,20 @@ struct Check {
                      && !named.isUserInteractionEnabled, "named in coral at the top centre, taking no touches")
         doubleTap()
         precondition((canvas.tool as? PKInkingTool)?.inkType == .pen && !controller.brushing && named.text == "Pen", "and back to the pen")
-        // The brush keeps its width on screen as the page zooms.
+        // The eraser and the brush keep their width on screen as the page zooms, from any zoom change, not only a pinch's end.
         doubleTap()
+        for zoom: CGFloat in [0.3, 3, 1] {
+            controller.show(controller.center, zoom: zoom)
+            controller.scrollViewDidZoom(canvas)
+            let width = (canvas.tool as! PKEraserTool).width
+            precondition(abs(width - controller.eraser.width) < 0.3 && width * zoom < 60, "the eraser fits the screen at zoom \(zoom): \(width * zoom) points")
+        }
         doubleTap()
         for zoom: CGFloat in [3, 2, 0.5, 1] {
             controller.show(controller.center, zoom: zoom)
-            controller.scrollViewDidEndZooming(canvas, with: nil, atScale: zoom)
+            controller.scrollViewDidZoom(canvas)
             let width = (canvas.tool as! PKInkingTool).width * canvas.zoomScale
-            precondition(controller.brushing && abs(width - CanvasController.editWidth) < 0.01, "the brush is editWidth wide on screen at zoom \(zoom): \(width)")
+            precondition(controller.brushing && abs(width - CanvasController.editWidth) < 0.06, "the brush is editWidth wide on screen at zoom \(zoom): \(width)")
         }
         doubleTap()
 
