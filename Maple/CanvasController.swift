@@ -3,8 +3,9 @@ import SwiftUI
 
 struct Paper: UIViewControllerRepresentable {
     let page: Page
+    var voiceEnabled = false
     func makeUIViewController(context: Context) -> CanvasController { CanvasController(page: page) }
-    func updateUIViewController(_ controller: CanvasController, context: Context) {}
+    func updateUIViewController(_ controller: CanvasController, context: Context) { controller.setVoiceEnabled(voiceEnabled) }
 }
 
 /// One page of paper: Apple Pencil writes, two fingers pan, pinch and rotate, two-finger tap undoes, three-finger tap redoes,
@@ -31,6 +32,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var saveErrorShown = false
     let history = UndoManager()
     var marks: Marks!
+    private(set) var voice: Voice?
 
     // PencilKit registers stroke undo with the responder chain's manager; own it so the finger taps can reach it.
     override var undoManager: UndoManager? { history }
@@ -151,8 +153,20 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        voice?.cancel()
         marks.stop()
         saveNow()  // the gallery reads the file next, for the thumbnail
+    }
+
+    func setVoiceEnabled(_ enabled: Bool) {
+        loadViewIfNeeded()
+        if enabled, loadError == nil {
+            if voice == nil { voice = Voice(controller: self) }
+        } else {
+            voice?.cancel()
+            voice?.button.removeFromSuperview()
+            voice = nil
+        }
     }
 
     /// The page point in the middle of the screen; survives rotation and different screen sizes.
@@ -198,6 +212,14 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
         guard UIPencilInteraction.preferredTapAction != .ignore else { return }
         cycle()
+    }
+
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        guard UIPencilInteraction.preferredSqueezeAction != .ignore else {
+            voice?.squeeze(.cancelled)
+            return
+        }
+        voice?.squeeze(squeeze.phase)
     }
 
     /// Pen, then eraser, then the edit brush, then the pen again, named at the top of the screen for a moment.

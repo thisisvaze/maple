@@ -7,6 +7,8 @@ struct Gallery: View {
     @State var selection: Set<URL>?  // nil when not selecting
     @State var confirmingDeletion = false
     @State var deletionError: String?
+    @State var settings = false
+    @AppStorage("voiceInput") var voiceInput = false
     @Namespace var zoom
 
     var body: some View {
@@ -34,6 +36,9 @@ struct Gallery: View {
             }
             .navigationTitle(selection.map { "\($0.count) Selected" } ?? "Pages")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Settings", systemImage: "gearshape") { settings = true }
+                }
                 if let selection {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Cancel") { self.selection = nil }
@@ -68,8 +73,21 @@ struct Gallery: View {
                 Text(deletionError ?? "")
             }
         }
+        .sheet(isPresented: $settings) {
+            NavigationStack {
+                Form {
+                    Section {
+                        Toggle("Voice input", isOn: $voiceInput)
+                    } footer: {
+                        Text("Squeeze and hold Apple Pencil Pro to record a question through the iPad microphone. Release to send it to Meta and get an answer about your page. Recording stops after one minute and waits for release. You can also tap the microphone button to start and stop.")
+                    }
+                }
+                .navigationTitle("Settings")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { settings = false } } }
+            }
+        }
         .fullScreenCover(item: $open, onDismiss: { pages = Page.all() }) { page in
-            Paper(page: page)
+            Paper(page: page, voiceEnabled: voiceInput)
                 .ignoresSafeArea()
                 .overlay(alignment: .topLeading) {
                     Button { open = nil } label: {

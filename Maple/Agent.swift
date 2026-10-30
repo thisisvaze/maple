@@ -50,10 +50,10 @@ nonisolated struct Agent: Sendable {
     }
 
     /// `near` is a close-up with the new mark in red; `around` is the working area. `gesture` is "question" or
-    /// "double_dot". `target` is the earlier answer the mark sits beside, if any.
-    func ask(near: Data, around: Data, gesture: String, threads: [Thread], target: String?) async throws -> Answer {
-        struct Context: Encodable { var gesture: String, target: String?, threads: [Thread] }
-        let context = String(decoding: try JSONEncoder().encode(Context(gesture: gesture, target: target, threads: threads)), as: UTF8.self)
+    /// "double_dot", or "voice" with a transcript in `speech`. `target` is the earlier answer the mark sits beside, if any.
+    func ask(near: Data, around: Data, gesture: String, threads: [Thread], target: String?, speech: String? = nil) async throws -> Answer {
+        struct Context: Encodable { var gesture: String, target: String?, threads: [Thread], speech: String? }
+        let context = String(decoding: try JSONEncoder().encode(Context(gesture: gesture, target: target, threads: threads, speech: speech)), as: UTF8.self)
         let reply = try await muse.respond([.png(near), .png(around), .text(context)], instructions: Self.instructions, schema: Self.schema)
         return try JSONDecoder().decode(Answer.self, from: Data(reply.text.utf8))
     }
@@ -93,6 +93,8 @@ nonisolated struct Agent: Sendable {
     The first image is a close-up: red ink is the newest strokes, dark ink is earlier writing. The second image shows the working area around it, not necessarily the whole page. The close-up often cuts off the start of a question, so read the complete expression or sentence from the second image. Check superscripts, fractions, operators and line breaks carefully. If text is cut off or unreadable, say which part instead of inventing it.
 
     The gesture is question when the red ink ends with a handwritten question mark. It is double_dot when the person tapped twice in one spot to say "look here": work out what they want from the ink right around the dots and help, by answering the question there, explaining a term, or checking or continuing the working.
+
+    For gesture voice, speech is the person's transcribed question. The images show the center and the visible page, with no red mark. Answer the spoken question using that context and earlier answers; set reading to the question you heard. If "this" or "that" is ambiguous, ask which part they mean. Voice answers appear in a bubble.
 
     Your reply is written on their page in pen, beside the mark, so keep it short. Reply in plain text: at most three short sentences, or 3 to 6 short checklist items, one per line, when asked for a list. No markdown or LaTeX; write maths with Unicode (x², √, π, ≈, ÷). Work numbers out carefully before stating them, and never guess a value. If the target or handwriting is unclear, ask a short clarifying question instead.
     When the ink only names a problem, passage or quote without writing it out (like "IMO 2022 Q1 ?"), they want to read it: give its exact text if you know it confidently, at whatever length it takes, and set passage. Otherwise say you can't recall it exactly.

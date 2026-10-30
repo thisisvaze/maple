@@ -22,6 +22,8 @@
 	<string>1</string>
 	<key>MODEL_API_KEY</key>
 	<string>$(MODEL_API_KEY)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record a spoken question when you squeeze Apple Pencil Pro or tap the microphone. Audio is sent to Meta to transcribe and answer it.</string>
 	<key>TYPESAFE_API_KEY</key>
 	<string>$(TYPESAFE_API_KEY)</string>
 	<key>UIApplicationSceneManifest</key>

@@ -376,13 +376,33 @@ final class Marks {
         }
     }
 
-    /// Keeps an answer as a quiet dot: a ?'s waits to be tapped, a double dot's opens at once.
+    /// Answers a spoken question about the visible page, using the same crops and saved threads as pen questions.
+    func askVoice(_ transcript: String) async throws {
+        guard !closed, let agent, let view = canvas.superview else { throw CancellationError() }
+        try Task.checkCancellation()
+        let turn = atan2(canvas.transform.b, canvas.transform.a), reading = CGAffineTransform(rotationAngle: turn)
+        let area = screen.reduce(CGRect.null) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
+        guard !area.isEmpty else { throw Muse.Failure("Open a page before asking a question.") }
+        let zoom = canvas.zoomScale, safe = view.safeAreaLayoutGuide.layoutFrame
+        let near = CGRect(x: area.midX - area.width / 4, y: area.midY - area.height / 4, width: area.width / 2, height: area.height / 2)
+        let threads = notes.filter { area.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
+        let anchor = onPage(CGRect(x: safe.minX + 24, y: safe.minY + 96, width: 0, height: 0))[0]
+        let (closeUp, around) = await Self.crops(canvas.drawing.transformed(using: reading), near, area)
+        try Task.checkCancellation()
+        let answer = try await agent.ask(near: closeUp, around: around, gesture: "voice", threads: threads, target: nil, speech: transcript)
+        try Task.checkCancellation()
+        guard !closed else { throw CancellationError() }
+        guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Muse.Failure("The answer was empty. Please try again.") }
+        show(Note(mark: "voice", trigger: [], anchor: anchor, zoom: zoom, reading: transcript, reply: answer.reply, turn: turn), bubble: nil)
+    }
+
+    /// Keeps an answer as a quiet dot: a ?'s waits to be tapped; double dots and voice answers open at once.
     func show(_ note: Note, bubble: Bubble?) {
         notes.append(note)
         save()
         let shown = bubble ?? add(Bubble(anchor: note.anchor, zoom: note.zoom, turn: note.turn ?? 0))
         shown.note = note
-        if note.mark == "double_dot" { shown.toggle(true) }
+        if note.mark == "double_dot" || note.mark == "voice" { shown.toggle(true) }
     }
 
     /// Writes an answer in ink where Room finds space beside its mark on the screen it was asked from, or keeps it a quiet
