@@ -145,7 +145,6 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        instantTiles()
         if let loadError {
             let alert = UIAlertController(title: "Couldn't open this page", message: loadError.localizedDescription + " The saved file has been left untouched.", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default))
@@ -259,19 +258,23 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         else if brushing, let tool = canvas.tool as? PKInkingTool, abs(tool.width - brush.width) > 0.05 { canvas.tool = brush }
     }
 
-    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { instantTiles() }  // PencilKit may have made a new one
+    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { instantTiles(true) }  // PencilKit may have made a new one
 
     /// PencilKit drops old ink tiles when a pinch changes the zoom, then fades the re-rendered ones in from nothing over
     /// 0.25 s, so every pinch dimmed patches of ink and brought them back (v1, 27 Oct device probe). Its tiles live in a
     /// plain view inside its private attachment view: run that view's clock 1000× fast and the fade lands within a frame.
-    /// Not the attachment view itself: a zoom bounce animates its bounds, which must keep pace with the page. Found by
-    /// class name; if it's ever missing, nothing changes.
-    func instantTiles() {
+    /// Only from a pinch until the pen comes down: at that speed the ink being written drew as dots joined by curves
+    /// (29 Oct, on the iPad). Not the attachment view itself: a zoom bounce animates its bounds, which must keep pace with
+    /// the page. Found by class name; if it's ever missing, nothing changes.
+    func instantTiles(_ on: Bool) {
         func find(_ v: UIView) -> UIView? { "\(type(of: v))" == "PKCanvasAttachmentView" ? v : v.subviews.lazy.compactMap(find).first }
-        find(canvas)?.subviews.filter { type(of: $0) == UIView.self }.forEach { $0.layer.speed = 1000 }
+        find(canvas)?.subviews.filter { type(of: $0) == UIView.self }.forEach { $0.layer.speed = on ? 1000 : 1 }
     }
 
-    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { marks.penDown(editing: brushing) }
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        instantTiles(false)  // the ink being written keeps PencilKit's own pace
+        marks.penDown(editing: brushing)
+    }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
         marks.penUp(writing: canvas.tool is PKInkingTool, editing: brushing)  // erasing isn't a mark

@@ -52,10 +52,13 @@ struct Check {
         }
         precondition(canvas.drawing.dataRepresentation() == ink, "turning the view never rewrites ink")
         precondition(canvas.transform == .identity && controller.turner.transform != .identity, "the canvas stays upright; its turner turns")
-        controller.instantTiles()
+        controller.scrollViewWillBeginZooming(canvas, with: nil)
         func attachment(_ v: UIView) -> UIView? { "\(type(of: v))" == "PKCanvasAttachmentView" ? v : v.subviews.lazy.compactMap(attachment).first }
         let tiles = attachment(canvas)?.subviews.filter { type(of: $0) == UIView.self } ?? []
         precondition(!tiles.isEmpty && tiles.allSatisfy { $0.layer.speed == 1000 }, "PencilKit's tiles are where instantTiles looks, and fade in at once")
+        controller.canvasViewDidBeginUsingTool(canvas)
+        precondition(tiles.allSatisfy { $0.layer.speed == 1 }, "the pen coming down puts PencilKit back at its own pace")
+        controller.canvasViewDidEndUsingTool(canvas)
         let installed = controller.view.gestureRecognizers!.first { $0 is UIRotationGestureRecognizer }!
         precondition(installed.delegate === controller)
         precondition(controller.gestureRecognizer(installed, shouldRecognizeSimultaneouslyWith: canvas.panGestureRecognizer))
