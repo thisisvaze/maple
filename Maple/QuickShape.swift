@@ -31,6 +31,7 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
         self.controller = controller
         super.init(target: nil, action: nil)
         cancelsTouchesInView = false
+        requiresExclusiveTouchType = false  // a finger counts while the Pencil is down
         delaysTouchesBegan = false
         delaysTouchesEnded = false
         delegate = self

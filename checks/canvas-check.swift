@@ -53,6 +53,14 @@ struct Check {
             near(bubble.convert(.zero, to: controller.view), canvas.convert(CGPoint(x: anchor.x * canvas.zoomScale, y: anchor.y * canvas.zoomScale), to: controller.view))
         }
         precondition(canvas.drawing.dataRepresentation() == ink, "turning the view never rewrites ink")
+        let held = (zoom: canvas.zoomScale, size: canvas.bounds.size)
+        twist.angle += 0.2
+        controller.rotate(twist)
+        precondition(canvas.zoomScale == held.zoom && canvas.bounds.size == held.size, "a twist never sets the zoom or resizes the page, which cut short a pinch made with it")
+        canvas.zoomScale = 1.7  // a pinch under way
+        controller.viewDidLayoutSubviews()  // a label appearing lays the page out
+        precondition(canvas.zoomScale == 1.7, "laying out on the same screen leaves the zoom alone")
+        canvas.zoomScale = held.zoom
         func shadow() -> Bool? {
             ((NSClassFromString("PKHoverSettings") as? NSObject.Type)?.perform(NSSelectorFromString("sharedSettings"))?.takeUnretainedValue() as? NSObject)?.value(forKey: "toolShadowActive") as? Bool
         }

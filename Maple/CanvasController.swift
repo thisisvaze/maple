@@ -6,6 +6,7 @@ import SwiftUI
 /// points apart and ink comes out as dots joined by curves, at 51° through a parent view, its own transform or a sublayer
 /// transform alike, against 1.5 here (30 Oct, iPad probes, gaps measured from stored strokes).
 final class Turner: UIWindow {
+    static let pagesButton: CGFloat = 66  // the Pages button's corner: 16 of padding and 44 of button, and a little more
     weak var controller: CanvasController?
 
     override var undoManager: UndoManager? { controller?.undoManager }  // a window would otherwise answer with its own
@@ -15,7 +16,7 @@ final class Turner: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let controller, let page = controller.view, controller.presentedViewController == nil else { return nil }
         let spot = convert(point, to: page), safe = page.safeAreaInsets
-        let corner = CGRect(x: 0, y: 0, width: safe.left + Marks.pagesButton, height: safe.top + Marks.pagesButton)
+        let corner = CGRect(x: 0, y: 0, width: safe.left + Self.pagesButton, height: safe.top + Self.pagesButton)
         return page.hitTest(spot, with: event) === page && !corner.contains(spot) ? super.hitTest(point, with: event) : nil
     }
 }
@@ -51,7 +52,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     let toolName = UILabel()  // names the tool for a moment after a double-tap
     var loadError: (any Error)?
     var dirty = false
-    var laidOut = false
+    var laidOutSize = CGSize.zero  // the screen the page was last laid out for
     var rotation: CGFloat = 0
     var twist: CGFloat?  // the fingers' last angle on screen, while they turn the page
     var saveTask: Task<Void, Never>?
@@ -173,11 +174,13 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         super.viewDidLayoutSubviews()
         // One finger or a palm never moves the paper. Set here: PencilKit resets it to 1 on joining a window.
         canvas.panGestureRecognizer.minimumNumberOfTouches = 2
-        guard view.bounds.width > 0, view.bounds.height > 0 else { return }
-        if laidOut {
+        // Only a new screen size moves the page: a label or button laid out mid-pinch, like Jev's tag, must not reset the zoom.
+        guard view.bounds.width > 0, view.bounds.height > 0, view.bounds.size != laidOutSize else { return }
+        if laidOutSize != .zero {
+            laidOutSize = view.bounds.size
             show(center, zoom: canvas.zoomScale)
         } else {
-            laidOut = true
+            laidOutSize = view.bounds.size
             let v = UserDefaults.standard.array(forKey: page.viewportKey) as? [Double] ?? []
             if (v.count == 3 || v.count == 4), v.allSatisfy(\.isFinite), v[2] > 0 {
                 rotation = v.count == 4 ? v[3] : 0
@@ -242,17 +245,22 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
                 y: (canvas.contentOffset.y + canvas.bounds.height / 2) / canvas.zoomScale)
     }
 
+    /// The page is a square as wide as the screen's diagonal, centred on it, so it covers every corner at any angle and
+    /// turning it never resizes it. Resizing a transformed view's frame would distort it.
     func show(_ center: CGPoint, zoom: CGFloat) {
-        Self.pencilShadow(abs(rotation) < Self.straight)
-        let turn = CGAffineTransform(rotationAngle: rotation)
-        // Cover every screen corner at any angle; resizing a transformed view's frame would distort it.
-        turner.bounds.size = view.bounds.applying(turn.inverted()).size
+        let side = hypot(view.bounds.width, view.bounds.height).rounded(.up)
+        turner.bounds.size = CGSize(width: side, height: side)
         turner.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        turner.transform = turn
         canvas.frame = turner.bounds
+        turn()
         canvas.zoomScale = zoom
         canvas.contentOffset = CGPoint(x: center.x * canvas.zoomScale - canvas.bounds.width / 2,
                                        y: center.y * canvas.zoomScale - canvas.bounds.height / 2)
+    }
+
+    func turn() {
+        Self.pencilShadow(abs(rotation) < Self.straight)
+        turner.transform = CGAffineTransform(rotationAngle: rotation)
     }
 
     /// PencilKit's hover shadow can't see the page's turn, which is what Turner hides from it, so on a turned page it fell
@@ -276,7 +284,9 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
             guard let twist else { return }
             let pivot = gesture.location(in: view), before = canvas.convert(pivot, from: view)
             rotation = (rotation + (angle - twist).remainder(dividingBy: 2 * .pi)).remainder(dividingBy: 2 * .pi)
-            show(center, zoom: canvas.zoomScale)
+            // Only the turn and the offset change, never the zoom or the canvas's size: either, set mid-gesture, cuts short the
+            // pinch the fingers are also making, as every twist event did from 27 Oct.
+            turn()
             let after = canvas.convert(pivot, from: view)
             canvas.contentOffset.x += before.x - after.x
             canvas.contentOffset.y += before.y - after.y
