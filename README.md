@@ -14,6 +14,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Optional voice input: off by default in gallery Settings. Hold an Apple Pencil Pro squeeze to record, release to send; a microphone button is also available. Muse Voice Transcribe turns the recording into text, then Spark answers with the visible page as context in a saved bubble
 - [x] Marks: 0.6 s after the pen rests, Jev reads the gesture the new ink makes; a `?` or an empty box wakes Muse, and so does a double dot, which the iPad reads from its timing. Jev's verdict shows in the top-right corner for 3 s ("question 97%", "maybe frame 62%")
 - [x] Answers in ink: a `?` or a double dot is answered in Maple's blue pen right beside it, once the pen rests, in a Hershey cursive hand with real maths (powers, ±, √, Greek). Room picks the spot so it never lands on the person's writing: the rest of the line, the line below, the nearest gap, or a gap further off with a dashed line back. It reads the line level on a slant or a turned page. The answer is real ink: it saves, zooms, erases and undoes like the person's, and VoiceOver reads it. While Muse answers, an opal thinking orb sits at the mark
+- [x] Answers are grounded: Muse hands every number that needs working out to the app's own calculator (a small maths grammar, never run as code), and searches the web for anything current, like recent events or prices
 - [x] Quiet dots: exact texts asked for by name (a quote, a poem, a named problem), text the pen can't write exactly, and answers with no room stay a dot that opens into a glass bubble
 - [x] Writing over an answer fades it under the new writing until that writing is gone; scribbling an answer or drawing out removes it, in one undo
 - [x] Edit brush: coral marks (circles, arrows, crossings-out, a few words) change Maple's own drawings and answers. After a 1.5 s rest, Muse gets the targets with the marks in red; a drawing is redrawn in its own box, only in the parts that change, and an answer is rewritten in place. The marks fade away, all as one undo. Marks Muse can't read stay with an orange dot to try again
@@ -26,7 +27,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 
 | Model | Used for |
 |---|---|
-| `muse-spark-1.3` (Meta) | Answering pen or voice questions, drawing in a box, and editing ink, all at minimal effort |
+| `muse-spark-1.3` (Meta) | Answering pen or voice questions (with web search and a calculate tool), drawing in a box, and editing ink, all at minimal effort |
 | `muse-voice-transcribe-1.0` (Meta) | Transcribing a recorded question when voice input is enabled; uses the same Meta API key |
 | `jev-1.13.0` (TypeSafe) | The first look at every mark: which gesture it is, in about 0.2 s |
 
@@ -44,6 +45,7 @@ swiftc -swift-version 6 -parse-as-library Maple/Drawing.swift Maple/Hershey.swif
 swiftc -swift-version 6 -parse-as-library Maple/Hershey.swift Maple/Handwriting.swift checks/handwriting-check.swift -o /tmp/handwriting-check && /tmp/handwriting-check
 swiftc -swift-version 6 -O -parse-as-library Maple/Room.swift checks/room-check.swift -o /tmp/room-check && /tmp/room-check
 swiftc -swift-version 6 -parse-as-library Maple/{Transcribe,Muse,Agent,Drawing,Hershey}.swift checks/voice-check.swift -o /tmp/voice-check && /tmp/voice-check
+swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
 swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
 MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]   # Jev reads marks; Muse answers, draws, edits a drawing and an answer
 ```

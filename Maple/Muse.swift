@@ -15,6 +15,17 @@ nonisolated struct Muse: Sendable {
         let text: String
         let outputTokens: Int
         let reasoningTokens: Int
+        var searched = false  // it searched the web
+        var called: [String] = []  // the functions it called, in order
+    }
+
+    /// A function Muse may call. Maple runs it on the device and sends back what it returns; an error goes back as text,
+    /// so Muse can try again or answer without it.
+    struct Function: Sendable {
+        let name: String
+        let description: String
+        let parameters: String  // JSON Schema for its arguments, in the strict subset
+        let run: @Sendable (Data) throws -> String
     }
 
     struct Failure: LocalizedError {
@@ -23,6 +34,7 @@ nonisolated struct Muse: Sendable {
     }
 
     static let endpoint = URL(string: "https://api.meta.ai/v1/responses")!
+    static let maxCalls = 4  // calibration knob: rounds of function calls before Muse has to answer
     var key: String
     var model = "muse-spark-1.3"
 
@@ -32,17 +44,19 @@ nonisolated struct Muse: Sendable {
         return Muse(key: key)
     }
 
-    /// `schema` (JSON Schema, strict subset) makes the reply text a JSON object that matches it.
-    func respond(_ parts: [Part], instructions: String? = nil, schema: Data? = nil, effort: Effort = .minimal, maxOutputTokens: Int = 4000) async throws -> Reply {
+    /// `schema` (JSON Schema, strict subset) makes the reply text a JSON object that matches it. With `search`, Muse may
+    /// search the web first; with `functions`, it may call them, each round's calls answered before it goes on.
+    func respond(_ parts: [Part], instructions: String? = nil, schema: Data? = nil, effort: Effort = .minimal, maxOutputTokens: Int = 4000,
+                 search: Bool = false, functions: [Function] = []) async throws -> Reply {
         let content: [[String: String]] = parts.map {
             switch $0 {
             case .text(let text): ["type": "input_text", "text": text]
             case .png(let data): ["type": "input_image", "image_url": "data:image/png;base64," + data.base64EncodedString()]
             }
         }
+        var input: [Any] = [["type": "message", "role": "user", "content": content]]
         var body: [String: Any] = [
             "model": model,
-            "input": [["type": "message", "role": "user", "content": content]],
             "reasoning": ["effort": effort.rawValue],
             "max_output_tokens": maxOutputTokens,
             "store": false,  // Maple keeps its own threads; nothing needs to live on Meta's side
@@ -51,6 +65,43 @@ nonisolated struct Muse: Sendable {
         if let schema {
             body["text"] = ["format": ["type": "json_schema", "name": "answer", "strict": true, "schema": try JSONSerialization.jsonObject(with: schema)]]
         }
+        var tools: [[String: Any]] = try functions.map {
+            ["type": "function", "name": $0.name, "description": $0.description, "strict": true,
+             "parameters": try JSONSerialization.jsonObject(with: Data($0.parameters.utf8))]
+        }
+        if search { tools.append(["type": "web_search", "search_context_size": "low"]) }
+        if !tools.isEmpty { body["tools"] = tools }
+        // Nothing is stored on Meta's side, so each round sends the whole exchange so far: the question, Muse's output
+        // items as they came, and Maple's answers to its calls.
+        var searched = false, called: [String] = []
+        for _ in 0...Self.maxCalls {
+            body["input"] = input
+            let data = try await post(body)
+            let items = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["output"] as? [[String: Any]] ?? []
+            searched = searched || items.contains { $0["type"] as? String == "web_search_call" }
+            let calls = items.filter { $0["type"] as? String == "function_call" }
+            guard !calls.isEmpty else {
+                var reply = try Self.reply(from: data)
+                (reply.searched, reply.called) = (searched, called)
+                return reply
+            }
+            input += items
+            for call in calls {
+                let name = call["name"] as? String ?? "", arguments = Data((call["arguments"] as? String ?? "{}").utf8)
+                let output: String
+                if let function = functions.first(where: { $0.name == name }) {
+                    do { output = try function.run(arguments) } catch { output = "error: \(error.localizedDescription)" }
+                } else {
+                    output = "error: there's no function \(name)"
+                }
+                called.append(name)
+                input.append(["type": "function_call_output", "call_id": call["call_id"] as? String ?? "", "output": output])
+            }
+        }
+        throw Failure("Muse kept calling functions without answering")
+    }
+
+    private func post(_ body: [String: Any]) async throws -> Data {
         var request = URLRequest(url: Self.endpoint, timeoutInterval: 120)  // high effort can think for 30 s or more
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -62,10 +113,11 @@ nonisolated struct Muse: Sendable {
             let message = (try? Self.decoder.decode(Response.self, from: data).error?.message) ?? String(decoding: data.prefix(300), as: UTF8.self)
             throw Failure("Muse returned \(status): \(message)")
         }
-        return try Self.reply(from: data)
+        return data
     }
 
-    /// The answer is the `output_text` of the `message` item; the `reasoning` item before it holds the model's thinking.
+    /// The answer is the `output_text` of the last `message` item. The `reasoning` items hold the model's thinking, and
+    /// earlier messages are commentary, like "I'll search for that" before a search.
     static func reply(from data: Data) throws -> Reply {
         let response = try decoder.decode(Response.self, from: data)
         if let message = response.error?.message { throw Failure(message) }
@@ -73,9 +125,8 @@ nonisolated struct Muse: Sendable {
             throw Failure("Muse stopped early (\(response.incompleteDetails?.reason ?? response.status ?? "unknown"))")
         }
         let text = response.output.filter { $0.type == "message" }
-            .flatMap { $0.content ?? [] }
-            .filter { $0.type == "output_text" }
-            .compactMap(\.text).joined()
+            .map { ($0.content ?? []).filter { $0.type == "output_text" }.compactMap(\.text).joined() }
+            .last { !$0.isEmpty } ?? ""
         guard !text.isEmpty else { throw Failure("Muse returned no text") }
         return Reply(text: text, outputTokens: response.usage?.outputTokens ?? 0,
                      reasoningTokens: response.usage?.outputTokensDetails?.reasoningTokens ?? 0)

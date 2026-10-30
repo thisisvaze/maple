@@ -54,6 +54,18 @@ struct Check {
         precondition(question.reply.contains("7") && !question.passage, "a written ? is answered, in ink")
 
         start = .now
+        let sum = picture([("17.3 × 2.9 + √41 ", false), ("?", true)])  // 56.573…
+        let worked = try await agent.ask(near: sum, around: sum, gesture: "question", threads: [], target: nil)
+        print("worked out: \(worked) in \(start.duration(to: .now))")
+        precondition(worked.calculated > 0 && worked.reply.contains("56.57"), "the app works the number out for Muse")
+
+        start = .now
+        let news = picture([("latest F1 race winner ", false), ("?", true)])
+        let current = try await agent.ask(near: news, around: news, gesture: "question", threads: [], target: nil)
+        print("current: \(current) in \(start.duration(to: .now))")
+        precondition(current.searched, "something current is searched for")
+
+        start = .now
         let named = picture([("Gettysburg Address ", false), ("?", true)])  // fits the 640 px picture
         let quote = try await agent.ask(near: named, around: named, gesture: "question", threads: [], target: nil)
         print("exact text: \(quote) in \(start.duration(to: .now))")

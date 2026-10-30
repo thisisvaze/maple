@@ -371,7 +371,7 @@ final class Marks {
         let start = ContinuousClock.now
         do {
             let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target)
-            logger.notice("answered gesture=\(gesture, privacy: .public) passage=\(answer.passage) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
+            logger.notice("answered gesture=\(gesture, privacy: .public) passage=\(answer.passage) searched=\(answer.searched) calculated=\(answer.calculated) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             guard !closed else { return }
             guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
             let note = Note(mark: gesture, trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading, reply: answer.reply, turn: turn)
