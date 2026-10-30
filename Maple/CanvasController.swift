@@ -22,6 +22,10 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     let page: Page
     let canvas = PKCanvasView()
+    /// Turns the page; the canvas inside it stays upright. A PKCanvasView carrying a rotation itself drops ink tiles it
+    /// still needs while zooming, so a turned page blinked blank mid-pinch (v1, 27 Oct sim film at 76°: 58 frames lost
+    /// the ink with the canvas turned, 5 with a turner, 10 with the page straight).
+    let turner = UIView()
     let pen = PKInkingTool(.pen, color: .graphite, width: penWidth)
     let toolName = UILabel()  // names the tool for a moment after a double-tap
     var loadError: (any Error)?
@@ -59,8 +63,10 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         view = UIView()
         view.backgroundColor = .paper  // the paper sits behind a clear canvas, so things can later go between them
         view.clipsToBounds = true
-        canvas.frame = view.bounds
-        view.addSubview(canvas)
+        turner.frame = view.bounds
+        view.addSubview(turner)
+        canvas.frame = turner.bounds
+        turner.addSubview(canvas)
     }
 
     override func viewDidLoad() {
@@ -92,6 +98,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         }
         canvas.delegate = self  // after loading, so the load itself isn't an edit
         marks = Marks(canvas: canvas, page: page, notes: notes)
+        marks.host = view
 
         let undoTap = UITapGestureRecognizer(target: self, action: #selector(undo))
         undoTap.numberOfTouchesRequired = 2
@@ -138,6 +145,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        instantTiles()
         if let loadError {
             let alert = UIAlertController(title: "Couldn't open this page", message: loadError.localizedDescription + " The saved file has been left untouched.", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default))
@@ -178,9 +186,10 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     func show(_ center: CGPoint, zoom: CGFloat) {
         let turn = CGAffineTransform(rotationAngle: rotation)
         // Cover every screen corner at any angle; resizing a transformed view's frame would distort it.
-        canvas.bounds.size = view.bounds.applying(turn.inverted()).size
-        canvas.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        canvas.transform = turn
+        turner.bounds.size = view.bounds.applying(turn.inverted()).size
+        turner.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        turner.transform = turn
+        canvas.frame = turner.bounds
         canvas.zoomScale = zoom
         canvas.contentOffset = CGPoint(x: center.x * canvas.zoomScale - canvas.bounds.width / 2,
                                        y: center.y * canvas.zoomScale - canvas.bounds.height / 2)
@@ -243,6 +252,18 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) { marks.layout() }
+
+    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { instantTiles() }  // PencilKit may have made a new one
+
+    /// PencilKit drops old ink tiles when a pinch changes the zoom, then fades the re-rendered ones in from nothing over
+    /// 0.25 s, so every pinch dimmed patches of ink and brought them back (v1, 27 Oct device probe). Its tiles live in a
+    /// plain view inside its private attachment view: run that view's clock 1000× fast and the fade lands within a frame.
+    /// Not the attachment view itself: a zoom bounce animates its bounds, which must keep pace with the page. Found by
+    /// class name; if it's ever missing, nothing changes.
+    func instantTiles() {
+        func find(_ v: UIView) -> UIView? { "\(type(of: v))" == "PKCanvasAttachmentView" ? v : v.subviews.lazy.compactMap(find).first }
+        find(canvas)?.subviews.filter { type(of: $0) == UIView.self }.forEach { $0.layer.speed = 1000 }
+    }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { marks.penDown(editing: brushing) }
 

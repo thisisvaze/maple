@@ -75,6 +75,18 @@ final class Marks {
         var ids: Set<String> { Set(marks.map(Marks.id) + targets.map(\.id)) }
     }
 
+    /// The view the page is seen in. The page sets it, as its canvas sits upright inside a view that turns it; on its
+    /// own, a canvas is seen in its superview.
+    weak var host: UIView?
+    var screenView: UIView? { host ?? canvas.superview }
+
+    /// The page's turn on screen, the reading frame's angle, whichever view carries it.
+    var turn: CGFloat {
+        guard let view = screenView else { return 0 }
+        let o = canvas.convert(CGPoint.zero, to: view), x = canvas.convert(CGPoint(x: 1, y: 0), to: view)
+        return atan2(x.y - o.y, x.x - o.x)
+    }
+
     init(canvas: PKCanvasView, page: Page, notes: [Note]) {
         self.canvas = canvas
         self.page = page
@@ -221,17 +233,17 @@ final class Marks {
     }
 
     /// The screen's corners in page points, clockwise from the top-left.
-    var screen: [CGPoint] { onPage(canvas.superview?.bounds ?? .zero) }
+    var screen: [CGPoint] { onPage(screenView?.bounds ?? .zero) }
 
     /// The Pages button's corner of the screen, which answers keep clear of, in page points.
     var pagesCorner: [CGPoint] {
-        let safe = canvas.superview?.safeAreaInsets ?? .zero
+        let safe = screenView?.safeAreaInsets ?? .zero
         return onPage(CGRect(x: 0, y: 0, width: safe.left + Self.pagesButton, height: safe.top + Self.pagesButton))
     }
 
     /// A rect on screen as the page points under its corners, clockwise from the top-left.
     func onPage(_ rect: CGRect) -> [CGPoint] {
-        guard let view = canvas.superview else { return [] }
+        guard let view = screenView else { return [] }
         let zoom = canvas.zoomScale
         return [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY),
                 CGPoint(x: rect.minX, y: rect.maxY)].map {
@@ -251,7 +263,7 @@ final class Marks {
     func look() {
         guard let agent, asking < Self.maxAsking, !closed else { return }
         let drawing = canvas.drawing, zoom = canvas.zoomScale
-        let turn = atan2(canvas.transform.b, canvas.transform.a), reading = CGAffineTransform(rotationAngle: turn)
+        let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
         let recent = drawing.strokes.filter(AgentPen.person).suffix(12).compactMap { stroke -> Grouping.Stroke? in
             let bounds = Self.bounds(stroke, turn: turn, zoom: zoom)
             let started = stroke.path.creationDate.timeIntervalSince1970
@@ -322,7 +334,7 @@ final class Marks {
 
     /// Jev's verdict in the top-right corner for 3 s, for tuning: what it saw and how sure, "maybe" when that fell short.
     func tag(_ verdict: Jev.Verdict) {
-        guard let screen = canvas.superview else { return }
+        guard let screen = screenView else { return }
         lastTag?.removeFromSuperview()
         let label = UILabel()
         label.text = (verdict.mark == verdict.top ? "" : "maybe ") + verdict.top.replacingOccurrences(of: "_", with: " ") + " \(Int((verdict.probability * 100).rounded()))%"
@@ -378,9 +390,9 @@ final class Marks {
 
     /// Answers a spoken question about the visible page, using the same crops and saved threads as pen questions.
     func askVoice(_ transcript: String) async throws {
-        guard !closed, let agent, let view = canvas.superview else { throw CancellationError() }
+        guard !closed, let agent, let view = screenView else { throw CancellationError() }
         try Task.checkCancellation()
-        let turn = atan2(canvas.transform.b, canvas.transform.a), reading = CGAffineTransform(rotationAngle: turn)
+        let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
         let area = screen.reduce(CGRect.null) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
         guard !area.isEmpty else { throw Muse.Failure("Open a page before asking a question.") }
         let zoom = canvas.zoomScale, safe = view.safeAreaLayoutGuide.layoutFrame
@@ -682,7 +694,7 @@ final class Marks {
     /// a loop drawn round them. At most maxTargets, nearest the marks first. Nil without marks, or when all they point
     /// at is being edited: they wait for the next edit then.
     func batch(_ ids: Set<String>) -> Batch? {
-        let zoom = canvas.zoomScale, turn = atan2(canvas.transform.b, canvas.transform.a), reach = Self.editReach / zoom
+        let zoom = canvas.zoomScale, turn = self.turn, reach = Self.editReach / zoom
         let marks = canvas.drawing.strokes.filter { ids.contains(Self.id($0)) && !editing.contains(Self.id($0)) }
         guard !marks.isEmpty else { return nil }
         let points = marks.flatMap { Self.points($0, every: reach / 4).joined() }
