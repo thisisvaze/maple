@@ -3,7 +3,7 @@
 //   sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > "$CHECK_DIR/Colors.swift"
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator -swift-version 6 \
 //     -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{CanvasController,Voice,Transcribe,Marks,Bubble,Written,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{CanvasController,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Grouping,Agent,Muse,Drawing,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
@@ -196,7 +196,116 @@ struct Check {
         let c = turned.convert(CGPoint.zero, to: controller.view), d = turned.convert(CGPoint(x: 20, y: 0), to: controller.view)
         precondition(abs(c.y - d.y) < 0.5, "a bubble reads level on screen")
         try await brush()
+        try savedHistory()
+        try voicePlacement()
         print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame, edit brush")
+    }
+
+    static func savedHistory() throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString), page = Page(url: folder, edited: .now)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        func stroke(_ i: Int) -> PKStroke {
+            let drawn = AgentPen.stroke([CGPoint(x: 2000, y: 3000 + i), CGPoint(x: 2060, y: 3000 + i)], width: 3, step: 2)
+            return PKStroke(ink: PKInk(.pen, color: .black), path: drawn.path)
+        }
+        func gesture(_ c: CanvasController, _ edit: (inout PKDrawing) -> Void) {
+            c.canvasViewDidBeginUsingTool(c.canvas)
+            var drawing = c.canvas.drawing
+            edit(&drawing)
+            c.canvas.drawing = drawing
+            c.canvasViewDidEndUsingTool(c.canvas)
+            c.marks.settle()
+            c.marks.waiting?.cancel()  // no model calls in a persistence check
+        }
+        // A legacy page gains history from this opening onward. 105 additions retain the last 100, as single-stroke deltas.
+        try PKDrawing(strokes: [stroke(0)]).dataRepresentation().write(to: page.ink)
+        var c = open(page)
+        for i in 1...105 { gesture(c) { $0.strokes.append(stroke(i)) } }
+        precondition(c.history.undoCount == 100 && c.history.redoCount == 0)
+        precondition(c.history.past.allSatisfy { $0.before.empty && $0.after.state.drawing.strokes.count == 1 }, "history stores changes, not whole pages")
+        c.saveNow()
+        c = open(page)
+        precondition(c.loadError == nil && c.canvas.drawing.strokes.count == 106 && c.history.undoCount == 100, "100 steps survive a reload")
+        for _ in 0..<40 { c.undo() }
+        c.saveNow()
+        c = open(page)
+        precondition(c.canvas.drawing.strokes.count == 66 && c.history.undoCount == 60 && c.history.redoCount == 40, "both stacks survive")
+        for _ in 0..<40 { c.redo() }
+        for _ in 0..<100 { c.undo() }
+        precondition(c.canvas.drawing.strokes.count == 6 && !c.history.canUndo && c.history.redoCount == 100, "oldest five edits stay beyond the retained history")
+        c.saveNow()
+        c = open(page)
+        for _ in 0..<100 { c.redo() }
+        precondition(c.canvas.drawing.strokes.count == 106 && !c.history.canRedo)
+        c.undo()
+        gesture(c) { $0.strokes.append(stroke(200)) }
+        precondition(!c.history.canRedo, "new writing discards the old redo branch")
+
+        // Pixel erasure changes a stroke without changing its ID. Undo restores its mask and depth after reopening.
+        let original = c.canvas.drawing.strokes.map(Marks.id)
+        gesture(c) { $0.strokes[2].mask = UIBezierPath(rect: CGRect(x: 2010, y: 2990, width: 20, height: 30)) }
+        precondition(c.history.past.last?.before.state.drawing.strokes.count == 1 && c.history.past.last?.after.state.drawing.strokes.count == 1)
+        c.saveNow()
+        c = open(page)
+        precondition(c.canvas.drawing.strokes[2].mask != nil)
+        c.undo()
+        precondition(c.canvas.drawing.strokes.map(Marks.id) == original && c.canvas.drawing.strokes[2].mask == nil, "erased ink returns to its layer")
+        c.redo()
+
+        // A whole answer and its note undo together. Red edit instructions never enter the saved history.
+        let answer = stroke(300), note = Note(mark: "question", trigger: [], anchor: .zero, zoom: 1, reading: "test", reply: "answer")
+        var brush = stroke(301)
+        brush.ink = PKInk(.pen, color: AgentPen.coral)
+        c.canvas.drawing.strokes.insert(brush, at: 0)
+        c.marks.apply(.init(add: [answer], remove: [Marks.id(brush)], notes: [note]))
+        c.saveNow()
+        c = open(page)
+        c.undo()
+        precondition(c.marks.notes.isEmpty && !c.canvas.drawing.strokes.contains(where: AgentPen.edit))
+        c.redo()
+        precondition(c.marks.notes == [note] && c.canvas.drawing.strokes.last.map(Marks.id) == Marks.id(answer))
+
+        // An invalid archive is not silently opened as an older page and overwritten.
+        let bad = Data("broken archive".utf8)
+        try bad.write(to: page.stateFile, options: .atomic)
+        let broken = open(page)
+        precondition(broken.loadError != nil && !broken.canvas.isUserInteractionEnabled)
+        broken.dirty = true
+        broken.saveNow()
+        let untouched = try Data(contentsOf: page.stateFile)
+        precondition(untouched == bad)
+        print("history ok: 100 compact steps, reload, redo branch, pixel erasure, answer notes, edit cleanup, corrupt-file protection")
+    }
+
+    static func voicePlacement() throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString), page = Page(url: folder, edited: .now)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let c = open(page), marks = c.marks!
+        c.rotation = 0.4
+        c.show(c.center, zoom: 1.7)
+        let line = marks.onPage(CGRect(x: 200, y: 600, width: 180, height: 0))
+        let ink = AgentPen.stroke(Array(line.prefix(2)), width: 3, step: 2)
+        c.canvas.drawing.strokes = [PKStroke(ink: c.pen.ink, path: ink.path)]
+        let fallback = marks.onPage(CGRect(x: 24, y: 96, width: 0, height: 0))[0]
+        let note = Note(mark: "voice", trigger: [], anchor: fallback, zoom: c.canvas.zoomScale, reading: "what is this?", reply: "This is your answer.", turn: marks.turn)
+        let first = marks.add(marks.voiceBubble(for: note))
+        let rect = first.convert(first.bounds, to: c.view)
+        precondition(c.view.bounds.contains(rect) && rect.minY > 450 && !rect.intersects(CGRect(x: 197, y: 597, width: 186, height: 6)),
+                     "voice reply stays visible near the latest ink, clear of it: \(rect)")
+        let second = marks.add(marks.voiceBubble(for: note))
+        let next = second.convert(second.bounds, to: c.view)
+        precondition(c.view.bounds.contains(next) && !next.intersects(rect), "voice replies avoid existing bubbles")
+        print("voice placement ok: nearby writing, rotation, zoom, screen bounds, existing replies")
     }
 
     /// The edit brush: the Pencil's double-tap cycle, its marks told apart and never kept, when an edit runs, what it

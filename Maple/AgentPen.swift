@@ -3,7 +3,7 @@ import PencilKit
 /// The agent writes in real ink, so its drawings save, zoom, erase and undo like the person's. Its strokes are told apart
 /// by colour: PencilKit stores colours exactly, but turns .monoline ink into .pen when a page is saved and reopened
 /// (probed on the iOS 26.5 simulator, 29 Oct), so the ink type can't be trusted.
-enum AgentPen {
+nonisolated enum AgentPen {
     /// The light-mode blue PencilKit stores. In dark mode PencilKit draws its own conversion, #698FE0: 5.4:1 on the dark
     /// paper, and 8.6:1 for this one on the light paper.
     static let blue = UIColor(red: 0x1F / 255, green: 0x45 / 255, blue: 0x96 / 255, alpha: 1)

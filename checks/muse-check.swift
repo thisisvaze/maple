@@ -1,4 +1,4 @@
-// Offline: Muse's function-call rounds, the answer taken from the last message, web search, and Agent's calculate tool,
+// Offline: Muse's function-call rounds, the answer taken from the last message, web search, Agent's calculate tool and page names,
 // against a URLProtocol stub that plays the API's side.
 //   swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
 import Foundation
@@ -43,7 +43,13 @@ struct Check {
         } catch {
             precondition(error.localizedDescription.contains("kept calling"))
         }
-        print("muse ok: calculate, function-call rounds, last message, search, unknown function, endless calls")
+
+        // A page's name is its first line without quotes or full stop, and Muse gets what Maple read there and the current name.
+        let name = try await Agent(muse: Muse(key: "name")).name(page: Data(), readings: ["x² = 49 ?"], current: "Equations")
+        precondition(name == "Water cycle", "name: \(name)")
+        let sent = ((MuseStub.bodies.last!["input"] as! [[String: Any]])[0]["content"] as! [[String: Any]]).last!["text"] as! String
+        precondition(sent.contains("- x² = 49 ?") && sent.contains("Its current name: Equations"), "name context: \(sent)")
+        print("muse ok: calculate, function-call rounds, last message, search, unknown function, endless calls, page name")
     }
 }
 
@@ -67,6 +73,7 @@ nonisolated final class MuseStub: URLProtocol, @unchecked Sendable {
         switch request.value(forHTTPHeaderField: "Authorization") {
         case "Bearer calls": output = answered ? [message(#"{"reply": "56.57312424"}"#)] : [reasoning, message("Let me work that out.", commentary: true), call("calculate")]
         case "Bearer search": output = [message("I'll search for the latest result.", commentary: true), #"{"type":"web_search_call","id":"ws_1","status":"completed"}"#, message(#"{"reply": "Kimi Antonelli"}"#)]
+        case "Bearer name": output = [message("\"Water cycle.\"\nIt shows evaporation and rain.")]
         case "Bearer unknown": output = answered ? [message(#"{"reply": "done"}"#)] : [call("lookup")]
         default: output = [call("calculate")]
         }

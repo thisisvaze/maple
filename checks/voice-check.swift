@@ -99,6 +99,7 @@ struct Check {
         try await controller.marks.askVoice(transcript)
         precondition(controller.marks.notes.last?.mark == "voice" && controller.marks.notes.last?.reading == transcript)
         precondition(controller.marks.notes.last?.reply == "4" && controller.marks.bubbles.last?.open == true)
+        controller.saveNow()
         Store.queue.sync {}
         let saved = try page.loadNotes()
         precondition(saved.last?.mark == "voice", "voice answers persist")

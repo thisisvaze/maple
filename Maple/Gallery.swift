@@ -8,6 +8,8 @@ struct Gallery: View {
     @State var confirmingDeletion = false
     @State var deletionError: String?
     @State var settings = false
+    @State var renaming: Page?
+    @State var newName = ""
     @AppStorage("voiceInput") var voiceInput = false
     @Namespace var zoom
 
@@ -16,14 +18,27 @@ struct Gallery: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 32)], spacing: 40) {
                     ForEach(pages) { page in
-                        Button { tap(page) } label: {
-                            Card(page: page, selected: selection.map { $0.contains(page.id) }, zoom: zoom)
+                        VStack(spacing: 10) {
+                            Button { tap(page) } label: {
+                                Card(page: page, selected: selection.map { $0.contains(page.id) }, zoom: zoom)
+                            }
+                            .buttonStyle(.plain)
+                            .highPriorityGesture(LongPressGesture().onEnded { _ in select(page) })
+                            .accessibilityLabel(page.title)
+                            .accessibilityAddTraits(selection?.contains(page.id) == true ? .isSelected : [])
+                            .accessibilityHint(selection == nil ? "Opens this page. Touch and hold to select pages." : "Toggles selection.")
+                            .accessibilityAction(named: "Select page") { select(page) }
+                            .accessibilityAction(named: "Rename") { rename(page) }
+                            // Tapping the name renames the page, like Procreate.
+                            Button(page.title) { rename(page) }
+                                .font(.headline)
+                                .lineLimit(1)
+                                .buttonStyle(.plain)
+                                .accessibilityHidden(true)  // the card's Rename action covers it
+                            Text(page.edited, format: .dateTime.month().day().hour().minute())
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
-                        .highPriorityGesture(LongPressGesture().onEnded { _ in select(page) })
-                        .accessibilityAddTraits(selection?.contains(page.id) == true ? .isSelected : [])
-                        .accessibilityHint(selection == nil ? "Opens this page. Touch and hold to select pages." : "Toggles selection.")
-                        .accessibilityAction(named: "Select page") { select(page) }
                     }
                 }
                 .padding(32)
@@ -72,6 +87,23 @@ struct Gallery: View {
             } message: {
                 Text(deletionError ?? "")
             }
+            .alert("Rename page", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { page in
+                TextField("Untitled page", text: $newName)
+                Button("Rename") {
+                    if newName != page.title { page.rename(newName) }
+                    pages = Page.all()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("Leave it empty to let Maple name it from the ink.")
+            }
+            // Maple names pages whose ink changed since it last did. This runs again whenever the list changes, so a page
+            // is named soon after it closes; a name that fails is tried again then.
+            .task(id: pages) {
+                var named = false
+                for page in pages where page.needsName { named = await page.nameFromInk() || named }
+                if named { pages = Page.all() }
+            }
         }
         .sheet(isPresented: $settings) {
             NavigationStack {
@@ -115,6 +147,11 @@ struct Gallery: View {
         selection = selected
     }
 
+    func rename(_ page: Page) {
+        newName = page.title
+        renaming = page
+    }
+
     func select(_ page: Page) {
         selection = (selection ?? []).union([page.id])
     }
@@ -134,7 +171,7 @@ struct Gallery: View {
     }
 }
 
-/// A page's ink on paper, with when it was last written in.
+/// A page's ink on paper.
 struct Card: View {
     let page: Page
     var selected: Bool?  // nil when not selecting
@@ -143,34 +180,28 @@ struct Card: View {
     @Environment(\.colorScheme) var scheme
 
     var body: some View {
-        VStack(spacing: 10) {
-            Color(uiColor: .paper)
-                .aspectRatio(Page.aspect, contentMode: .fit)
-                .overlay { if let image { Image(uiImage: image).resizable().scaledToFit() } }
-                .clipShape(.rect(cornerRadius: 6))
-                .matchedTransitionSource(id: page.id, in: zoom) { $0.clipShape(.rect(cornerRadius: 6)) }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(selected == true ? Color.accentColor : .clear, lineWidth: 3)
+        Color(uiColor: .paper)
+            .aspectRatio(Page.aspect, contentMode: .fit)
+            .overlay { if let image { Image(uiImage: image).resizable().scaledToFit() } }
+            .clipShape(.rect(cornerRadius: 6))
+            .matchedTransitionSource(id: page.id, in: zoom) { $0.clipShape(.rect(cornerRadius: 6)) }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(selected == true ? Color.accentColor : .clear, lineWidth: 3)
+            }
+            .overlay(alignment: .topTrailing) {
+                if let selected {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.title2)
+                        .foregroundStyle(selected ? Color.accentColor : .secondary)
+                        .background(.regularMaterial, in: Circle())
+                        .padding(10)
+                        .accessibilityHidden(true)
                 }
-                .overlay(alignment: .topTrailing) {
-                    if let selected {
-                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                            .font(.title2)
-                            .foregroundStyle(selected ? Color.accentColor : .secondary)
-                            .background(.regularMaterial, in: Circle())
-                            .padding(10)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
-            Text("Untitled page").font(.headline)
-            Text(page.edited, format: .dateTime.month().day().hour().minute())
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .task(id: [page, scheme] as [AnyHashable]) {
-            image = await page.thumbnail(dark: scheme == .dark)
-        }
+            }
+            .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+            .task(id: [page, scheme] as [AnyHashable]) {
+                image = await page.thumbnail(dark: scheme == .dark)
+            }
     }
 }

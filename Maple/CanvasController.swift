@@ -54,11 +54,12 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var twist: CGFloat?  // the fingers' last angle on screen, while they turn the page
     var saveTask: Task<Void, Never>?
     var saveErrorShown = false
-    let history = UndoManager()
+    let history = History()
+    var strokeStart: PKDrawing?
     var marks: Marks!
     private(set) var voice: Voice?
 
-    // PencilKit registers stroke undo with the responder chain's manager; own it so the finger taps can reach it.
+    // The responder chain and finger taps share the page's persistent history.
     override var undoManager: UndoManager? { history }
     // Keep the system's three-finger editing menu from competing with redo.
     override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
@@ -107,12 +108,15 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         var notes: [Note] = []
         do {
             // Edit marks are instructions, never writing: any left when the page closed go now, and from its file at the next save.
-            var drawing = try page.load()
+            let archive = try page.loadArchive()
+            var drawing = try archive?.current.drawing ?? page.load()
             let count = drawing.strokes.count
             drawing.strokes.removeAll(where: AgentPen.edit)
             dirty = drawing.strokes.count < count
             canvas.drawing = drawing
-            notes = try page.loadNotes()
+            notes = try archive?.current.notes ?? page.loadNotes()
+            history.past = archive?.past ?? []
+            history.future = archive?.future ?? []
         } catch {
             loadError = error  // never save over a file we couldn't read
             canvas.isUserInteractionEnabled = false
@@ -120,6 +124,21 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         canvas.delegate = self  // after loading, so the load itself isn't an edit
         marks = Marks(canvas: canvas, page: page, notes: notes)
         marks.host = view
+        marks.persist = { [weak self] in self?.changed() }
+        marks.settled = { [weak self] in self?.finishStroke() }
+        history.prepare = { [weak self] in
+            guard let self, !marks.penOn else { return false }
+            finishStroke()
+            return true
+        }
+        history.restore = { [weak self] step, backwards in
+            guard let self else { return }
+            let state = step.applying(to: History.State(drawing: canvas.drawing, notes: marks.notes), backwards: backwards)
+            canvas.drawing = state.drawing
+            marks.notes = state.notes
+            marks.sync()
+            changed()
+        }
 
         let undoTap = UITapGestureRecognizer(target: self, action: #selector(undo))
         undoTap.numberOfTouchesRequired = 2
@@ -255,8 +274,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         other === canvas.panGestureRecognizer || other === canvas.pinchGestureRecognizer
     }
 
-    @objc func undo() { if history.canUndo { history.undo() } }
-    @objc func redo() { if history.canRedo { history.redo() } }
+    @objc func undo() { history.undo() }
+    @objc func redo() { history.redo() }
 
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
         guard UIPencilInteraction.preferredTapAction != .ignore else { return }
@@ -313,6 +332,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        finishStroke()
+        strokeStart = canvas.drawing
         instantTiles(false)  // the ink being written keeps PencilKit's own pace
         marks.penDown(editing: brushing)
     }
@@ -323,6 +344,18 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         marks.drawingChanged()
+        changed()
+    }
+
+    /// PencilKit may deliver the final ink after pen-up; Marks calls this once that drawing has settled.
+    func finishStroke() {
+        guard let before = strokeStart else { return }
+        strokeStart = nil
+        history.record(from: History.State(drawing: before, notes: marks.notes),
+                       to: History.State(drawing: canvas.drawing, notes: marks.notes))
+    }
+
+    func changed() {
         dirty = true
         saveTask?.cancel()
         saveTask = Task {
@@ -335,12 +368,13 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         UserDefaults.standard.set([center.x, center.y, canvas.zoomScale, rotation], forKey: page.viewportKey)
         guard dirty, loadError == nil else { return }
         dirty = false
-        var drawing = canvas.drawing  // copied here, encoded off the main thread
-        drawing.strokes.removeAll(where: AgentPen.edit)  // edit marks are instructions, never kept
-        let url = page.ink
-        Store.queue.async { [drawing] in
+        let archive = History.Archive(current: History.State(drawing: canvas.drawing, notes: marks.notes), past: history.past, future: history.future)
+        let url = page.stateFile
+        Store.queue.async {
             do {
-                try drawing.dataRepresentation().write(to: url, options: .atomic)
+                let encoder = PropertyListEncoder()
+                encoder.outputFormat = .binary
+                try encoder.encode(archive.forSaving).write(to: url, options: .atomic)
             } catch {
                 Task { @MainActor in
                     self.dirty = true
@@ -351,6 +385,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     @objc func saveNow() {
+        finishStroke()
         marks.flush()  // what Maple was waiting to write goes in now
         saveTask?.cancel()
         save()

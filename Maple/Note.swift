@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 /// An answer on the page, saved in the page's notes.json.
-nonisolated struct Note: Codable, Identifiable, Sendable {
+nonisolated struct Note: Codable, Identifiable, Equatable, Sendable {
     var id = UUID().uuidString
     var mark: String  // "question", "double_dot", "voice", or "frame" for a drawing in a box
     var trigger: [String]  // ids of the strokes it answers

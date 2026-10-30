@@ -6,9 +6,9 @@ import UIKit
 /// the frame its mark was written in, the page turned by `turn`.
 final class Bubble: UIView {
     static let width: CGFloat = 300
-    let anchor: CGPoint
+    var anchor: CGPoint
     let zoom: CGFloat  // the page's zoom when its mark was made
-    let turn: CGFloat
+    var turn: CGFloat
     var note: Note? { didSet { update() } }  // nil while Muse is reading
     var retry: (() -> Void)? { didSet { update() } }
     var deleted: () -> Void = {}

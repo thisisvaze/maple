@@ -7,7 +7,7 @@
 //   S=$(mktemp -d); mkdir $S/Check.app; sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > $S/Colors.swift
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator \
 //     -swift-version 6 -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{Marks,Bubble,Written,Note,Page,Grouping,Agent,Muse,Drawing,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{Marks,Bubble,Written,Note,Page,History,Grouping,Agent,Muse,Drawing,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     $S/Colors.swift checks/pipeline-check.swift -o $S/Check.app/pipeline
 //   plutil -create xml1 $S/Check.app/Info.plist; plutil -insert CFBundleIdentifier -string dev.maple.check $S/Check.app/Info.plist; cp Maple/*.jhf Maple/hand.json $S/Check.app/
 //   SIMCTL_CHILD_MODEL_API_KEY=... SIMCTL_CHILD_TYPESAFE_API_KEY=... xcrun simctl spawn booted $S/Check.app/pipeline $S   # writes the PNGs there

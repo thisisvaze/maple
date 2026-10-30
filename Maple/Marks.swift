@@ -40,6 +40,8 @@ final class Marks {
     weak var lastTag: UILabel?
     var work: [UUID: Task<Void, Never>] = [:]  // reading and answering in flight, cancelled when the page closes
     var closed = false
+    var persist: (() -> Void)?
+    var settled: (() -> Void)?
 
     // Maple writes on the page only while the pen rests: a finished stroke can take a moment to reach the drawing, and
     // setting the drawing under a live stroke can cut it short.
@@ -141,6 +143,7 @@ final class Marks {
 
     func settle() {
         settling?.cancel()
+        settled?()
         busy = false
         lastInk = .now
         if erasing { sync() }  // an answer erased away leaves VoiceOver too
@@ -195,6 +198,7 @@ final class Marks {
     /// Makes one step of Maple's changes to the page, undone and redone on its own. A stroke both removed and added is
     /// changed in place, so it keeps its depth among the person's strokes.
     func apply(_ change: Change) {
+        let before = History.State(drawing: canvas.drawing, notes: notes)
         var drawing = canvas.drawing, removed: [PKStroke] = []
         var adding = Dictionary(change.add.map { (Self.id($0), $0) }) { first, _ in first }
         drawing.strokes = drawing.strokes.compactMap { stroke in
@@ -208,15 +212,18 @@ final class Marks {
         notes.removeAll { change.dropping.contains($0.id) }
         notes += change.notes
         canvas.drawing = drawing
+        if change.undoable, let history = canvas.undoManager as? History {
+            history.record(from: before, to: History.State(drawing: drawing, notes: notes))
+        }
         save()
         sync()
-        guard change.undoable else { return }
+        guard change.undoable, !(canvas.undoManager is History) else { return }
         canvas.undoManager?.registerUndo(withTarget: self) {
             $0.apply(Change(add: removed, remove: Set(change.add.map(Self.id)), notes: dropped, dropping: Set(change.notes.map(\.id))))
         }
     }
 
-    static func id(_ stroke: PKStroke) -> String { "\(stroke.path.creationDate.timeIntervalSince1970)-\(stroke.randomSeed)" }
+    nonisolated static func id(_ stroke: PKStroke) -> String { "\(stroke.path.creationDate.timeIntervalSince1970)-\(stroke.randomSeed)" }
 
     /// A stroke's visible ink, a point every `step` page points along each part the eraser left, transform applied.
     static func points(_ stroke: PKStroke, every step: CGFloat) -> [[CGPoint]] {
@@ -395,17 +402,48 @@ final class Marks {
         let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
         let area = screen.reduce(CGRect.null) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
         guard !area.isEmpty else { throw Muse.Failure("Open a page before asking a question.") }
-        let zoom = canvas.zoomScale, safe = view.safeAreaLayoutGuide.layoutFrame
         let near = CGRect(x: area.midX - area.width / 4, y: area.midY - area.height / 4, width: area.width / 2, height: area.height / 2)
         let threads = notes.filter { area.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
-        let anchor = onPage(CGRect(x: safe.minX + 24, y: safe.minY + 96, width: 0, height: 0))[0]
         let (closeUp, around) = await Self.crops(canvas.drawing.transformed(using: reading), near, area)
         try Task.checkCancellation()
         let answer = try await agent.ask(near: closeUp, around: around, gesture: "voice", threads: threads, target: nil, speech: transcript)
         try Task.checkCancellation()
         guard !closed else { throw CancellationError() }
         guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Muse.Failure("The answer was empty. Please try again.") }
-        show(Note(mark: "voice", trigger: [], anchor: anchor, zoom: zoom, reading: transcript, reply: answer.reply, turn: turn), bubble: nil)
+        let safe = view.safeAreaLayoutGuide.layoutFrame
+        let anchor = onPage(CGRect(x: safe.minX + 24, y: safe.minY + 96, width: 0, height: 0))[0]
+        var note = Note(mark: "voice", trigger: [], anchor: anchor, zoom: canvas.zoomScale, reading: transcript, reply: answer.reply, turn: self.turn)
+        let bubble = voiceBubble(for: note)
+        note.anchor = bubble.anchor
+        note.turn = bubble.turn
+        show(note, bubble: add(bubble))
+    }
+
+    /// Finds room for the measured reply near the last visible writing, without another model request.
+    func voiceBubble(for note: Note) -> Bubble {
+        let bubble = Bubble(anchor: note.anchor, zoom: note.zoom, turn: note.turn ?? 0, note: note)
+        bubble.open = true
+        bubble.update()
+        let screen = screen, frame = CGAffineTransform(rotationAngle: note.turn ?? 0)
+        let area = Room.box(screen, frame)
+        let recent = canvas.drawing.strokes.last { AgentPen.person($0) && Room.box(Self.points($0, every: 4 / note.zoom).flatMap { $0 }, frame).intersects(area) }
+        var ink = ink(around: screen, marking: Set(recent.map { [Self.id($0)] } ?? []), zoom: note.zoom)
+        if recent == nil { ink.append(Room.Stroke(points: [note.anchor], person: false, mark: true)) }
+        let dots = bubbles.map { dot in
+            let r = dot.frame
+            return [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+                .map { CGPoint(x: $0.x / canvas.zoomScale, y: $0.y / canvas.zoomScale) }
+        }
+        let request = Room.Request(strokes: ink, doubleDot: false, screen: screen, avoid: [pagesCorner] + dots,
+                                   screenAngle: note.turn ?? 0, zoom: note.zoom, nib: nil)
+        if let place = Room.place(request, layout: { _, _ in
+            (CGRect(x: 0, y: 0, width: bubble.bounds.width / note.zoom, height: bubble.bounds.height / note.zoom), 1)
+        }) {
+            bubble.anchor = place.origin.applying(CGAffineTransform(rotationAngle: -place.angle))
+            bubble.turn = place.angle
+        }
+        // shortcut: a full page keeps the visible corner fallback; add a movable reply tray if crowded pages need it.
+        return bubble
     }
 
     /// Keeps an answer as a quiet dot: a ?'s waits to be tapped; double dots and voice answers open at once.
@@ -873,20 +911,22 @@ final class Marks {
 
     /// The close-up and the working area as Muse sees them: dark ink on white, the mark in red, at most 1568 px a side.
     @concurrent nonisolated static func crops(_ drawing: PKDrawing, _ near: CGRect, _ around: CGRect) async -> (Data, Data) {
-        func png(_ rect: CGRect) -> Data {
-            let scale = Self.scale(rect)
-            let size = CGSize(width: (rect.width * scale).rounded(), height: (rect.height * scale).rounded())
-            let format = UIGraphicsImageRendererFormat()
-            format.scale = 1
-            return UIGraphicsImageRenderer(size: size, format: format).pngData { context in
-                UIColor.white.setFill()
-                context.fill(CGRect(origin: .zero, size: size))
-                UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
-                    drawing.image(from: rect, scale: scale).draw(in: CGRect(origin: .zero, size: size))
-                }
+        (png(drawing, near), png(drawing, around))
+    }
+
+    /// `rect` of the drawing as Muse sees it: dark ink on white, at most 1568 px a side.
+    nonisolated static func png(_ drawing: PKDrawing, _ rect: CGRect) -> Data {
+        let scale = Self.scale(rect)
+        let size = CGSize(width: (rect.width * scale).rounded(), height: (rect.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).pngData { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+                drawing.image(from: rect, scale: scale).draw(in: CGRect(origin: .zero, size: size))
             }
         }
-        return (png(near), png(around))
     }
 
     @discardableResult func add(_ bubble: Bubble) -> Bubble {
@@ -911,6 +951,7 @@ final class Marks {
     }
 
     func save() {
+        if let persist { persist(); return }
         let notes = notes, url = page.notesFile
         Store.queue.async {
             do { try JSONEncoder().encode(notes).write(to: url, options: .atomic) }
