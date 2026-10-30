@@ -37,6 +37,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     // holds a pen to 0.88–25.7 page points, so it keeps this width from zoom 0.12 to 3.4 (probed, 29 Oct).
     static let editWidth: CGFloat = 3
     static let straight: CGFloat = .pi / 180  // a page turned less than this counts as straight
+    static let penPoint: CGFloat = 2.72  // the point size PencilKit stores for a pen of penWidth (30 Oct: 2.66 to 2.83 on the iPad)
     // ponytail: a fixed sheet stands in for an infinite one; recenter the ink if someone ever reaches an edge.
     static let sheet = Page.sheet
 
@@ -57,6 +58,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var saveErrorShown = false
     let history = History()
     var strokeStart: PKDrawing?
+    var quickShape: QuickShape!
     var marks: Marks!
     private(set) var voice: Voice?
 
@@ -155,6 +157,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         twist.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
         twist.delegate = self
         turner.addGestureRecognizer(twist)
+        quickShape = QuickShape(controller: self)
+        canvas.addGestureRecognizer(quickShape)
         view.addInteraction(UIPencilInteraction(delegate: self))  // in the key window: the Pencil's taps reach no other (30 Oct probe)
         toolName.font = .preferredFont(forTextStyle: .headline)
         toolName.adjustsFontForContentSizeCategory = true
@@ -353,6 +357,23 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
         marks.penUp(writing: canvas.tool is PKInkingTool, editing: brushing)  // erasing isn't a mark
+    }
+
+    /// The point size of the person's own ink, from their latest stroke, so a shape sits level with their writing.
+    var inkPoint: CGFloat {
+        guard let last = canvas.drawing.strokes.last(where: AgentPen.person), !last.path.isEmpty else { return Self.penPoint }
+        return last.path[last.path.count / 2].size.width
+    }
+
+    /// Lays `shape` down as a stroke of the person's own pen, a step of undo, in place of what PencilKit may have kept of the
+    /// stroke it was drawn from. Maple reads it like any mark: a box snapped square is still a box to fill.
+    func place(_ shape: Shape, drawnSince start: Date) {
+        finishStroke()
+        let zoom = canvas.zoomScale
+        let stroke = PKStroke(ink: pen.ink, path: AgentPen.stroke(shape.outline(spacing: 2 / zoom), width: inkPoint, step: 2 / zoom, date: start).path)
+        let dropped = canvas.drawing.strokes.filter { AgentPen.person($0) && $0.path.creationDate >= start }.map(Marks.id)
+        marks.apply(Marks.Change(add: [stroke], remove: Set(dropped)))
+        marks.penUp(writing: true)
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {

@@ -3,7 +3,7 @@
 //   sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > "$CHECK_DIR/Colors.swift"
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator -swift-version 6 \
 //     -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{CanvasController,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{CanvasController,QuickShape,Shape,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
@@ -208,6 +208,7 @@ struct Check {
         try await brush()
         try await boxes()
         try me()
+        try snapping()
         try savedHistory()
         try voicePlacement()
         print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame, edit brush")
@@ -672,6 +673,108 @@ struct Check {
 
     static func near(_ a: CGPoint, _ b: CGPoint) {
         precondition(hypot(a.x - b.x, a.y - b.y) < 0.75, "\(a) != \(b)")  // PencilKit rounds scroll offsets to pixels.
+    }
+
+    /// Draw, rest the pen, and it snaps: the page's side of what checks/shape-check.swift reads.
+    static func snapping() throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = Page(url: folder, edited: .now)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        UserDefaults.standard.set([2150.0, 3100.0, 1.0], forKey: page.viewportKey)
+        let controller = open(page), canvas = controller.canvas, quick = controller.quickShape!
+        func wobbly(_ corners: [CGPoint]) -> [CGPoint] {
+            zip(corners, corners.dropFirst()).flatMap { a, b in (0..<30).map { i in
+                let t = CGFloat(i) / 30, w = sin(CGFloat(i) * 0.7) * 1.5
+                return CGPoint(x: a.x + (b.x - a.x) * t + w, y: a.y + (b.y - a.y) * t - w)
+            } } + [corners.last!]
+        }
+        func draw(_ points: [CGPoint]) {
+            quick.start(points[0])
+            quick.move(Array(points.dropFirst()))
+        }
+        precondition(canvas.gestureRecognizers?.contains { $0 === quick } == true && quick.cancelsTouchesInView == false, "it watches and takes nothing")
+
+        // A hand-drawn box, the pen resting: a perfect box of the person's own ink, as one step of undo.
+        let box = wobbly([CGPoint(x: 2000, y: 3000), CGPoint(x: 2300, y: 3004), CGPoint(x: 2298, y: 3200), CGPoint(x: 2002, y: 3197), CGPoint(x: 2000, y: 3000)])
+        draw(box)
+        quick.rested()
+        guard case let .polygon(corners, true)? = quick.shape, corners.count == 4 else { preconditionFailure("a box: \(String(describing: quick.shape))") }
+        precondition(quick.preview.superlayer === canvas.layer && !canvas.panGestureRecognizer.isEnabled, "shown, and fingers don't pan while it's held")
+        quick.lift()
+        precondition(canvas.drawing.strokes.count == 1 && AgentPen.person(canvas.drawing.strokes[0]) && canvas.panGestureRecognizer.isEnabled && quick.preview.superlayer == nil, "it lands as the person's ink")
+        let drawn = canvas.drawing.strokes[0].path, xs = (0..<drawn.count).map { drawn[$0].location.x }, ys = (0..<drawn.count).map { drawn[$0].location.y }
+        let left = xs.min()!, right = xs.max()!, top = ys.min()!, bottom = ys.max()!
+        for i in 0..<drawn.count {
+            let p = drawn[i].location, sideways = min(abs(p.x - left), abs(p.x - right)), upways = min(abs(p.y - top), abs(p.y - bottom))
+            precondition(min(sideways, upways) < 0.01, "every point on a side of a true rectangle")
+        }
+        precondition(controller.history.canUndo, "a step of undo")
+        controller.history.undo()
+        precondition(canvas.drawing.strokes.isEmpty, "and undo takes it")
+
+        // Writing stays writing, and a stroke not held isn't touched.
+        let writing: [CGPoint] = (0..<200).map { (i: Int) -> CGPoint in
+            let n = CGFloat(i), x = 2000 + n * 1.2 + sin(n / 4) * 8, y = 3000 + cos(n / 4) * 14 + sin(n / 11) * 6
+            return CGPoint(x: x, y: y)
+        }
+        draw(writing)
+        quick.rested()
+        precondition(quick.shape == nil && quick.snapped == nil && canvas.panGestureRecognizer.isEnabled, "a pause in writing does nothing")
+        quick.lift()
+        precondition(canvas.drawing.strokes.isEmpty, "and nothing lands")
+        draw(wobbly([CGPoint(x: 2000, y: 3000), CGPoint(x: 2010, y: 3002)]))
+        quick.rested()
+        precondition(quick.shape == nil, "a stroke too small for a shape is writing")
+        quick.lift()
+
+        // A hand's tremor at the snap doesn't tilt it; dragging does. A finger locks a line to fifteen-degree steps, by the screen.
+        controller.rotation = 0.5
+        controller.show(controller.center, zoom: 1)
+        let line = wobbly([CGPoint(x: 2000, y: 3000), CGPoint(x: 2300, y: 3030)])
+        draw(line)
+        quick.rested()
+        let snapped = quick.shape, end = line.last!
+        quick.move([CGPoint(x: end.x + 2, y: end.y - 2)])
+        precondition(quick.shape == snapped, "a tremor moves nothing")
+        quick.move([CGPoint(x: end.x + 30, y: end.y + 90)])
+        guard case let .line(from, free)? = quick.shape else { preconditionFailure("a line") }
+        precondition(Shape.distance(free, CGPoint(x: end.x + 30, y: end.y + 90)) < 1e-6, "the end follows the pen")
+        quick.fingers.insert(UITouch())
+        quick.fingerChanged()
+        guard case let .line(_, locked)? = quick.shape else { preconditionFailure("a line") }
+        let on = (atan2(locked.y - from.y, locked.x - from.x) + controller.marks.turn) * 180 / .pi
+        precondition(abs(on / 15 - (on / 15).rounded()) < 1e-6, "fifteen-degree steps on screen, though the page is turned: \(on)")
+        quick.fingers.removeAll()
+        quick.fingerChanged()
+        guard case let .line(_, freed)? = quick.shape else { preconditionFailure("a line") }
+        precondition(Shape.distance(freed, free) < 1e-6, "a finger lifted frees it")
+        quick.lift()
+        precondition(canvas.drawing.strokes.count == 1, "one stroke")
+
+        // A finger on an oval makes a circle, and the shape lands as it shows.
+        controller.history.undo()
+        controller.rotation = 0
+        controller.show(controller.center, zoom: 1)
+        let oval: [CGPoint] = (0...120).map { (i: Int) -> CGPoint in
+            let a = CGFloat(i) * 0.052
+            return CGPoint(x: 2150 + 150 * cos(a), y: 3100 + 90 * sin(a))
+        }
+        draw(oval)
+        quick.rested()
+        quick.fingers.insert(UITouch())
+        quick.fingerChanged()
+        guard case let .ellipse(_, radii, _)? = quick.shape, radii.width == radii.height else { preconditionFailure("a circle: \(String(describing: quick.shape))") }
+        quick.lift()
+        quick.fingers.removeAll()
+        let circle = canvas.drawing.strokes[0].path, c = Shape.middle((0..<circle.count).map { circle[$0].location })
+        let radius = (0..<circle.count).map { Shape.distance(circle[$0].location, c) }
+        precondition(radius.max()! - radius.min()! < 1, "a true circle: \(radius.max()! - radius.min()!)")
+        print("snapping ok: perfect shapes as ink, undo, writing left alone, tremor, dragging, fifteen-degree steps on a turned page, circles")
     }
 
     /// What Maple remembers: learned on any page, shown in ink on the Me page, and forgotten by striking a line.

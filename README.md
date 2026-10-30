@@ -25,6 +25,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Exact diagrams: when angles and lengths have to be true (a 3-4-5 triangle, a road bike frame), Muse gives each point as an expression in real units. The app works them out, scales the figure evenly into the box and measures every length and angle it labels, so a label can't disagree with the ink. A stated value the points don't meet goes back to Muse once with the reason.
 - [x] Computed pictures: for what physics actually produces (hydrogen's 1s density, two-slit interference, a dipole's field lines, an orbit), Muse gives the equations and the app shades every pixel, traces flow lines with Runge–Kutta and plots curves, at one scale across and up.
 - [x] Pictures: a photo, painting or scene goes to Muse Image at the box's shape (about 10 s, $0.01), under the ink so you can write on it. Pictures save, reload, undo, scratch out and show on page cards. The edit brush repaints one from a copy with your marks on it, changing only what you marked.
+- [x] Perfect shapes, like Procreate's QuickShape: draw and rest the pen, and after a moment the stroke snaps into the line, arc, polyline, ellipse, circle, triangle, rectangle or quadrilateral it was meant to be. Still holding, drag to turn and scale it. A finger down locks it to fifteen-degree steps by the screen, and makes a circle, a square or an equilateral triangle. It lands as your own ink, one undo, and a box snapped square is still a box for Maple to fill. Writing is left alone, and a resting palm doesn't count as a finger.
 - [x] Asks first: a label with two real meanings, like Mercury alone, gets a question in ink beside the box ("The planet or the element?"). Your next mark in the box or on the question is the reply, and the box fills.
 - [x] Shared memory: every agent reads what Maple remembers about you, on every page. The Answer agent only proposes: plain code checks that each claim quotes your own words, that it isn't new wording of something you struck, and that nothing you wrote gets changed, then commits and logs it. "Noted: Is a nurse" shows for a moment. The Me page, pinned first in the gallery, shows it all in ink: strike a line and it's forgotten at once, undo brings it back, and whatever you write there stands in your own words. It stays on the iPad in `memory.json`, and goes to Meta with each model call.
 
@@ -46,6 +47,7 @@ Voice input uses the [file transcription endpoint](https://dev.meta.ai/docs/spee
 They run on the Mac, without the simulator.
 
 ```sh
+swiftc -swift-version 6 -O -parse-as-library Maple/Shape.swift checks/shape-check.swift -o /tmp/shape-check && /tmp/shape-check
 swiftc -swift-version 6 -parse-as-library Maple/Memory.swift checks/memory-check.swift -o /tmp/memory-check && /tmp/memory-check
 swiftc -swift-version 6 -parse-as-library Maple/Grouping.swift checks/grouping-check.swift -o /tmp/grouping-check && /tmp/grouping-check
 swiftc -swift-version 6 -parse-as-library Maple/{Drawing,Figure,Computed,Hershey}.swift checks/drawing-check.swift -o /tmp/drawing-check && /tmp/drawing-check
