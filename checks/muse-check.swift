@@ -1,6 +1,6 @@
 // Offline: Muse's function-call rounds, the answer taken from the last message, web search, Agent's calculate tool and page names,
 // against a URLProtocol stub that plays the API's side.
-//   swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Figure,Computed,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
+//   swiftc -swift-version 6 -parse-as-library Maple/{Muse,Memory,Agent,Drawing,Figure,Computed,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
 import Foundation
 
 @main

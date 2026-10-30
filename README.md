@@ -26,7 +26,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - [x] Computed pictures: for what physics actually produces (hydrogen's 1s density, two-slit interference, a dipole's field lines, an orbit), Muse gives the equations and the app shades every pixel, traces flow lines with Runge–Kutta and plots curves, at one scale across and up.
 - [x] Pictures: a photo, painting or scene goes to Muse Image at the box's shape (about 10 s, $0.01), under the ink so you can write on it. Pictures save, reload, undo, scratch out and show on page cards. The edit brush repaints one from a copy with your marks on it, changing only what you marked.
 - [x] Asks first: a label with two real meanings, like Mercury alone, gets a question in ink beside the box ("The planet or the element?"). Your next mark in the box or on the question is the reply, and the box fills.
-- [ ] Shared memory the agents read and propose changes to
+- [x] Shared memory: every agent reads what Maple remembers about you, on every page. The Answer agent only proposes: plain code checks that each claim quotes your own words, that it isn't new wording of something you struck, and that nothing you wrote gets changed, then commits and logs it. "Noted: Is a nurse" shows for a moment. The Me page, pinned first in the gallery, shows it all in ink: strike a line and it's forgotten at once, undo brings it back, and whatever you write there stands in your own words. It stays on the iPad in `memory.json`, and goes to Meta with each model call.
 
 ## Models
 
@@ -46,13 +46,14 @@ Voice input uses the [file transcription endpoint](https://dev.meta.ai/docs/spee
 They run on the Mac, without the simulator.
 
 ```sh
+swiftc -swift-version 6 -parse-as-library Maple/Memory.swift checks/memory-check.swift -o /tmp/memory-check && /tmp/memory-check
 swiftc -swift-version 6 -parse-as-library Maple/Grouping.swift checks/grouping-check.swift -o /tmp/grouping-check && /tmp/grouping-check
 swiftc -swift-version 6 -parse-as-library Maple/{Drawing,Figure,Computed,Hershey}.swift checks/drawing-check.swift -o /tmp/drawing-check && /tmp/drawing-check
 swiftc -swift-version 6 -parse-as-library Maple/Hershey.swift Maple/Handwriting.swift checks/handwriting-check.swift -o /tmp/handwriting-check && /tmp/handwriting-check
 swiftc -swift-version 6 -O -parse-as-library Maple/Room.swift checks/room-check.swift -o /tmp/room-check && /tmp/room-check
-swiftc -swift-version 6 -parse-as-library Maple/{Transcribe,Muse,Agent,Drawing,Figure,Computed,Hershey}.swift checks/voice-check.swift -o /tmp/voice-check && /tmp/voice-check
-swiftc -swift-version 6 -parse-as-library Maple/{Muse,Agent,Drawing,Figure,Computed,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
-swiftc -swift-version 6 -parse-as-library Maple/{Muse,MuseImage,Agent,Drawing,Figure,Computed,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
+swiftc -swift-version 6 -parse-as-library Maple/{Transcribe,Muse,Memory,Agent,Drawing,Figure,Computed,Hershey}.swift checks/voice-check.swift -o /tmp/voice-check && /tmp/voice-check
+swiftc -swift-version 6 -parse-as-library Maple/{Muse,Memory,Agent,Drawing,Figure,Computed,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
+swiftc -swift-version 6 -parse-as-library Maple/{Muse,MuseImage,Memory,Agent,Drawing,Figure,Computed,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
 MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]   # Jev reads marks; Muse answers, draws, edits a drawing and an answer
 ```
 

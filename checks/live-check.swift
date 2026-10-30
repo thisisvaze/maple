@@ -2,7 +2,7 @@
 // (a few cents): Jev reads each mark, and Muse answers a written ? and a double dot, fills six boxes (a diagram in named
 // parts, a graph, a computed picture, an exact figure, a painted picture, and a question and its reply), and takes two edits: a drawing's button relabelled, and an answer rewritten. The drawings
 // are saved as PNGs to the folder given, or the temporary folder.
-//   swiftc -swift-version 6 -parse-as-library Maple/{Muse,MuseImage,Agent,Drawing,Figure,Computed,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
+//   swiftc -swift-version 6 -parse-as-library Maple/{Muse,MuseImage,Memory,Agent,Drawing,Figure,Computed,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
 //   MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]
 import CoreText
 import Foundation
@@ -121,6 +121,25 @@ struct Check {
                 precondition(answered.kind != "ask", "Muse asks once")
             }
         }
+
+        // Memory: what someone says about themselves is proposed, checked against their words and used on the next page; a
+        // topic they only ask about is not.
+        start = .now
+        let told = picture([("I'm vegan, dinner idea ", false), ("?", true)])
+        let telling = try await agent.ask(near: told, around: told, gesture: "question", threads: [], target: nil)
+        var memory = Memory()
+        let kept = memory.propose(telling.remember ?? [], forgetting: [], evidence: telling.reading, page: "live").added
+        print("told: read \(telling.reading.debugDescription), proposed \(telling.remember ?? []), kept \(kept.map(\.text)) in \(start.duration(to: .now))")
+        precondition(kept.count == 1 && kept[0].text.lowercased().contains("vegan"), "being vegan is remembered")
+        start = .now
+        let later = picture([("cheap lunch ideas ", false), ("?", true)])
+        let using = try await agent.ask(near: later, around: later, gesture: "question", threads: [], target: nil, memory: memory.lines)
+        print("used: \(using.reply.debugDescription) in \(start.duration(to: .now))")
+        precondition(using.remember?.isEmpty != false && using.reply.lowercased().contains("vegan"), "memory shapes the next answer, and says so")
+        let topic = picture([("why is the sky blue ", false), ("?", true)])
+        let plain = try await agent.ask(near: topic, around: topic, gesture: "question", threads: [], target: nil)
+        print("topic: proposed \(plain.remember ?? [])")
+        precondition(plain.remember?.isEmpty != false, "a topic isn't a fact about them")
 
         // The edit brush, in red: a circle round a login screen's button and "Log in" beside it change that part only.
         let none = Drawing.Graph(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0), box = CGSize(width: 300, height: 360), corner = CGPoint(x: 60, y: 70)

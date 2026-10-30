@@ -103,6 +103,11 @@ struct Gallery: View {
                 var named = false
                 for page in pages where page.needsName { named = await page.nameFromInk() || named }
                 if named { pages = Page.all() }
+                for page in pages where page.unread {
+                    guard let lines = await page.handwriting() else { continue }
+                    Memories.shared.change { $0.written(lines, page: page.url.lastPathComponent) }
+                    try? Data().write(to: page.readFile)
+                }
             }
         }
         .sheet(isPresented: $settings) {
@@ -143,16 +148,19 @@ struct Gallery: View {
 
     func tap(_ page: Page) {
         guard var selected = selection else { open = page; return }
+        guard !page.isMe else { return }
         if !selected.insert(page.id).inserted { selected.remove(page.id) }
         selection = selected
     }
 
     func rename(_ page: Page) {
+        guard !page.isMe else { return }
         newName = page.title
         renaming = page
     }
 
     func select(_ page: Page) {
+        guard !page.isMe else { return }
         selection = (selection ?? []).union([page.id])
     }
 

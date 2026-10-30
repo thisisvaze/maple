@@ -3,7 +3,7 @@
 //   sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > "$CHECK_DIR/Colors.swift"
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator -swift-version 6 \
 //     -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{CanvasController,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{CanvasController,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
@@ -197,6 +197,7 @@ struct Check {
         precondition(abs(c.y - d.y) < 0.5, "a bubble reads level on screen")
         try await brush()
         try await boxes()
+        try me()
         try savedHistory()
         try voicePlacement()
         print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame, edit brush")
@@ -661,6 +662,99 @@ struct Check {
 
     static func near(_ a: CGPoint, _ b: CGPoint) {
         precondition(hypot(a.x - b.x, a.y - b.y) < 0.75, "\(a) != \(b)")  // PencilKit rounds scroll offsets to pixels.
+    }
+
+    /// What Maple remembers: learned on any page, shown in ink on the Me page, and forgotten by striking a line.
+    static func me() throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "me")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = Page(url: folder, edited: .now), memories = Memories.shared
+        let elsewhere = Page(url: folder.deletingLastPathComponent().appending(path: "other"), edited: .now)
+        try FileManager.default.createDirectory(at: elsewhere.url, withIntermediateDirectories: true)
+        memories.change { $0 = Memory() }
+        defer {
+            Store.queue.sync {}
+            memories.change { $0 = Memory() }
+            [page, elsewhere].forEach { UserDefaults.standard.removeObject(forKey: $0.viewportKey) }
+            try? FileManager.default.removeItem(at: folder.deletingLastPathComponent())
+        }
+        precondition(page.isMe && !elsewhere.isMe)
+
+        // An empty Me page says what it's for, and that line is nothing Maple remembers.
+        var controller = open(page), marks = controller.marks!
+        precondition(marks.notes.count == 1 && marks.notes[0].memory == nil && !marks.strokes(of: marks.notes[0]).isEmpty, "it says what it's for")
+        precondition(!controller.history.canUndo, "and that's not the person's to undo")
+        controller.saveNow()
+        marks.notes.removeAll()
+        marks.canvas.drawing = PKDrawing()
+        controller.saveNow()
+
+        // Another page learns from what the person says, through Memory's check, and says so in the corner.
+        let other = open(elsewhere).marks!
+        func answer(_ text: String, _ because: String) -> Agent.Answer {
+            Agent.Answer(reading: "", confidence: "high", reply: "", passage: false, remember: [.init(text: text, because: because)])
+        }
+        other.learn(answer("Is a nurse", "I'm a nurse"), evidence: "I'm a nurse, so what dose?")
+        precondition(memories.memory.lines.map(\.text) == ["Is a nurse"] && other.lastTag?.text == "Noted: Is a nurse", "noted")
+        other.learn(answer("Is a doctor", "I'm a doctor"), evidence: "I'm a nurse, so what dose?")
+        precondition(memories.memory.lines.count == 1, "a claim that quotes nothing they said stays out")
+        other.learn(answer("Prefers hints before answers", "hints first"), evidence: "hints first please")
+        let nurse = memories.memory.entries[0], hints = memories.memory.entries[1]
+
+        // The Me page shows each in ink, under what's there, in reach of the Pencil and out of the edit brush's.
+        Store.queue.sync {}
+        controller = open(page)
+        marks = controller.marks!
+        let canvas = controller.canvas
+        precondition(marks.notes.compactMap(\.memory) == [nurse.id, hints.id] && marks.notes.allSatisfy { !marks.strokes(of: $0).isEmpty }, "a line of ink each")
+        precondition(marks.notes[1].rect!.minY > marks.notes[0].rect!.maxY, "one under the other")
+        func stroke(_ points: [CGPoint]) -> PKStroke { PKStroke(ink: controller.pen.ink, path: AgentPen.stroke(points, width: 3, step: 2).path) }
+        let line = marks.notes[0].rect!
+        let across = stroke([CGPoint(x: line.minX - 4, y: line.midY), CGPoint(x: line.maxX + 4, y: line.midY + 3)])
+        canvas.drawing.strokes.append(across)
+        let swept = Marks.bounds(across, turn: 0, zoom: 1)
+        precondition(marks.batch([Marks.id(across)])?.targets.isEmpty == true, "the edit brush leaves memory to the person")
+
+        // A straight line along it strikes it out; a word written over it doesn't.
+        let word = stroke((0...24).map { CGPoint(x: line.minX + CGFloat($0) * 8, y: line.midY + ($0 % 2 == 0 ? -7 : 7)) })
+        canvas.drawing.strokes.append(word)
+        precondition(marks.struckLine(Marks.bounds(word, turn: 0, zoom: 1), by: [Marks.id(word)], turn: 0) == nil, "writing isn't a strike")
+        canvas.drawing.strokes.removeAll { Marks.id($0) == Marks.id(word) }
+        let short = stroke([CGPoint(x: line.minX, y: line.midY), CGPoint(x: line.minX + 10, y: line.midY)])
+        precondition(marks.struckLine(Marks.bounds(short, turn: 0, zoom: 1), by: [Marks.id(short)], turn: 0) == nil, "nor is a tick on it")
+        let struck = marks.struckLine(swept, by: [Marks.id(across)], turn: 0)
+        precondition(struck?.memory == nurse.id, "a line along it is")
+        marks.scratch(struck!, [Marks.id(across)])
+        marks.flush()
+        precondition(memories.memory.lines.map(\.id) == [hints.id] && marks.lastTag?.text == "Forgot: Is a nurse", "forgotten, at once")
+        precondition(memories.memory.entries[0].gone == "struck" && !canvas.drawing.strokes.contains { Marks.id($0) == Marks.id(across) }, "and the strike goes with it")
+
+        // Undo brings it back; what's struck stays struck across a reopening, and no agent can bring it back.
+        controller.history.undo()
+        precondition(memories.memory.lines.map(\.id) == [nurse.id, hints.id] && marks.notes.count == 2, "undone")
+        marks.scratch(marks.notes[0], [])
+        marks.flush()
+        precondition(memories.memory.lines.map(\.id) == [hints.id], "struck again")
+        controller.saveNow()
+        Store.queue.sync {}
+        let again = open(page)
+        precondition(again.marks.notes.compactMap(\.memory) == [hints.id], "it isn't written again")
+        other.learn(answer("Is a nurse", "I'm a nurse"), evidence: "I'm a nurse, really")
+        precondition(memories.memory.lines.map(\.id) == [hints.id], "the person's strike wins")
+
+        // A Me page that's lost its ink writes it again: losing the page never forgets anything.
+        try? FileManager.default.removeItem(at: page.stateFile)
+        try? FileManager.default.removeItem(at: page.ink)
+        try? FileManager.default.removeItem(at: page.notesFile)
+        let fresh = open(page)
+        precondition(fresh.marks.notes.compactMap(\.memory) == [hints.id] && memories.memory.lines.map(\.id) == [hints.id], "written again")
+
+        // What the person writes there stands as they wrote it.
+        memories.change { $0.written(["Vegetarian"], page: "me") }
+        precondition(memories.memory.lines.map(\.text) == [hints.text, "Vegetarian"], "theirs too")
+        let reopened = open(page)
+        precondition(reopened.marks.notes.compactMap(\.memory) == [hints.id], "their own line stays in their own ink")
+        print("me ok: learning on any page, lines of ink, striking, undo, strikes staying, losing the page")
     }
 
     /// An empty box, filled every way but ink: a painted picture, a computed one, an exact figure, and a question first.

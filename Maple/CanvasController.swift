@@ -37,7 +37,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     // holds a pen to 0.88–25.7 page points, so it keeps this width from zoom 0.12 to 3.4 (probed, 29 Oct).
     static let editWidth: CGFloat = 3
     // ponytail: a fixed sheet stands in for an infinite one; recenter the ink if someone ever reaches an edge.
-    static let sheet: CGFloat = 131_072
+    static let sheet = Page.sheet
 
     let page: Page
     let canvas = PKCanvasView()
@@ -126,6 +126,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         marks.host = view
         marks.persist = { [weak self] in self?.changed() }
         marks.settled = { [weak self] in self?.finishStroke() }
+        if let memory = marks.writeMemory() { marks.apply(memory) }
         history.prepare = { [weak self] in
             guard let self, !marks.penOn else { return false }
             finishStroke()

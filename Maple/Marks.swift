@@ -20,6 +20,9 @@ final class Marks {
     static let editReach: CGFloat = 24  // screen points from an edit mark to the ink it points at
     static let maxTargets = 4  // drawings and answers one edit changes at most, nearest the marks first
     static let fading: TimeInterval = 0.5  // seconds edit marks take to fade once read
+    static let meCap: CGFloat = 18, meWidth: CGFloat = 560  // the Me page's writing: capital height and line length
+    static let meStart = CGPoint(x: Page.sheet / 2 - 280, y: Page.sheet / 2 - 300)
+    static let meWelcome = "This is what I remember about you, on every page. Write anything here for me to keep. Strike out a line and I'll forget it."
 
     /// The agent's blue for dots, bubbles and their text: the ink's blue, and in dark mode the colour PencilKit draws it in.
     static let ink = UIColor { $0.userInterfaceStyle == .dark
@@ -30,6 +33,8 @@ final class Marks {
     let page: Page
     var agent = Muse.bundled.map { Agent(muse: $0) }  // a var so canvas-check can give it an offline Muse
     var painter = MuseImage.bundled  // a var too
+    var memories = Memories.shared  // and this
+    var lastShown: Set<String> = []  // on the Me page: the memories its ink showed last
     let jev = Jev.bundled
     var notes: [Note]
     var bubbles: [Bubble] = []
@@ -95,6 +100,7 @@ final class Marks {
         self.canvas = canvas
         self.page = page
         self.notes = notes
+        lastShown = Set(notes.compactMap(\.memory))
         sync()
         if agent == nil { logger.error("No MODEL_API_KEY in Secrets.xcconfig: marks are off") }
         if jev == nil { logger.error("No TYPESAFE_API_KEY in Secrets.xcconfig: only double dots are read") }
@@ -271,7 +277,7 @@ final class Marks {
     /// Reads the latest strokes for a mark and, if they're new, asks about them.
     func look() {
         guard let agent, asking < Self.maxAsking, !closed else { return }
-        let drawing = canvas.drawing, zoom = canvas.zoomScale
+        let drawing = canvas.drawing, zoom = canvas.zoomScale, memory = memories.memory.lines
         let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
         let recent = drawing.strokes.filter(AgentPen.person).suffix(12).compactMap { stroke -> Grouping.Stroke? in
             let bounds = Self.bounds(stroke, turn: turn, zoom: zoom)
@@ -293,6 +299,7 @@ final class Marks {
         }
         // In the reading frame: the mark, a close-up around it, and the screen with the close-up.
         let mark = recent.filter { selected.contains($0.id) }.reduce(CGRect.null) { $0.union($1.bounds) }
+        if let line = struckLine(mark, by: trigger, turn: turn) { return scratch(line, trigger) }  // no need to ask anyone
         let asked = question(answeredBy: mark, turn: turn, zoom: zoom)  // the box and the question go in the close-up with the reply
         let focus = asked.map { mark.union(Self.reach($0, turn: turn)) } ?? mark
         let side = max(focus.width, focus.height) + 2 * Self.nearPad
@@ -325,16 +332,16 @@ final class Marks {
             switch gesture {
             case _ where asked != nil && gesture != "scribble" && gesture != "strike":
                 if let asked, let box = asked.asked {
-                    await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: asked.trigger, box: box.box, turn: box.turn, zoom: asked.zoom, asked: asked, reply: trigger)
+                    await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: asked.trigger, box: box.box, turn: box.turn, zoom: asked.zoom, asked: asked, reply: trigger, memory: memory)
                 }
             case "question":  // the orb shows from the moment Jev sees the ?
                 await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, anchor: anchor,
-                          turn: turn, zoom: zoom, view: view, bubble: add(Bubble(anchor: anchor, zoom: zoom, turn: turn)))
+                          turn: turn, zoom: zoom, view: view, bubble: add(Bubble(anchor: anchor, zoom: zoom, turn: turn)), memory: memory)
             case "double_dot":
                 await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, anchor: anchor,
-                          turn: turn, zoom: zoom, view: view, bubble: thinking)
+                          turn: turn, zoom: zoom, view: view, bubble: thinking, memory: memory)
             case "frame":
-                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, turn: turn, zoom: zoom)
+                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, turn: turn, zoom: zoom, memory: memory)
             case "scribble", "strike":  // scratching out an answer or a drawing removes it
                 if let note = answer(touching: trigger) { scratch(note, trigger) }
             case "writing" where sure, "other" where sure:  // writing over an answer fades it under the writing
@@ -349,10 +356,15 @@ final class Marks {
 
     /// Jev's verdict in the top-right corner for 3 s, for tuning: what it saw and how sure, "maybe" when that fell short.
     func tag(_ verdict: Jev.Verdict) {
+        flash((verdict.mark == verdict.top ? "" : "maybe ") + verdict.top.replacingOccurrences(of: "_", with: " ") + " \(Int((verdict.probability * 100).rounded()))%")
+    }
+
+    /// A word in the top-right corner for 3 s.
+    func flash(_ text: String) {
         guard let screen = screenView else { return }
         lastTag?.removeFromSuperview()
         let label = UILabel()
-        label.text = (verdict.mark == verdict.top ? "" : "maybe ") + verdict.top.replacingOccurrences(of: "_", with: " ") + " \(Int((verdict.probability * 100).rounded()))%"
+        label.text = text
         label.font = .preferredFont(forTextStyle: .caption1)
         label.textColor = .secondaryLabel
         label.sizeToFit()
@@ -379,15 +391,16 @@ final class Marks {
     /// that find no room, stay a quiet dot to tap open, or for a double dot, opened at once. The dot is the thinking orb
     /// meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?, trigger: [String],
-             anchor: CGPoint, turn: CGFloat, zoom: CGFloat, view: (screen: [CGPoint], avoid: [[CGPoint]]), bubble: Bubble?) async {
+             anchor: CGPoint, turn: CGFloat, zoom: CGFloat, view: (screen: [CGPoint], avoid: [[CGPoint]]), bubble: Bubble?, memory: [Memory.Line] = []) async {
         guard present(trigger) else { return remove(bubble) }
         asking += 1
         defer { asking -= 1 }
         let start = ContinuousClock.now
         do {
-            let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target)
+            let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target, memory: memory)
             logger.notice("answered gesture=\(gesture, privacy: .public) passage=\(answer.passage) searched=\(answer.searched) calculated=\(answer.calculated) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             guard !closed else { return }
+            learn(answer, evidence: answer.reading)
             guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
             let note = Note(mark: gesture, trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading, reply: answer.reply, turn: turn)
             guard !answer.passage, let text = Handwriting.answers.writable(answer.reply) else { return show(note, bubble: bubble) }
@@ -398,7 +411,7 @@ final class Marks {
             bubble?.retry = { [weak self, weak bubble] in
                 bubble?.retry = nil
                 self?.run { await self?.ask(agent, near, around, gesture: gesture, threads: threads, target: target, trigger: trigger,
-                                            anchor: anchor, turn: turn, zoom: zoom, view: view, bubble: bubble) }
+                                            anchor: anchor, turn: turn, zoom: zoom, view: view, bubble: bubble, memory: memory) }
             }
         }
     }
@@ -414,9 +427,10 @@ final class Marks {
         let threads = notes.filter { area.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
         let (closeUp, around) = await Self.crops(canvas.drawing.transformed(using: reading), near, area)
         try Task.checkCancellation()
-        let answer = try await agent.ask(near: closeUp, around: around, gesture: "voice", threads: threads, target: nil, speech: transcript)
+        let answer = try await agent.ask(near: closeUp, around: around, gesture: "voice", threads: threads, target: nil, speech: transcript, memory: memories.memory.lines)
         try Task.checkCancellation()
         guard !closed else { throw CancellationError() }
+        learn(answer, evidence: transcript)
         guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Muse.Failure("The answer was empty. Please try again.") }
         let safe = view.safeAreaLayoutGuide.layoutFrame
         let anchor = onPage(CGRect(x: safe.minX + 24, y: safe.minY + 96, width: 0, height: 0))[0]
@@ -452,6 +466,69 @@ final class Marks {
         }
         // shortcut: a full page keeps the visible corner fallback; add a movable reply tray if crowded pages need it.
         return bubble
+    }
+
+    /// Takes what the Answer agent asks to remember or forget through Memory's check, against the person's words at this
+    /// mark, and says what changed in the corner of the screen. The pen must be able to write it on the Me page.
+    func learn(_ answer: Agent.Answer, evidence: String) {
+        let proposals = (answer.remember ?? []).filter { Handwriting.answers.writable($0.text) != nil }
+        guard !proposals.isEmpty || answer.forget?.isEmpty == false else { return }
+        let (added, forgotten) = memories.change {
+            $0.propose(proposals, forgetting: answer.forget ?? [], evidence: evidence, page: page.url.lastPathComponent)
+        }
+        logger.notice("memory added=\(added.count) forgotten=\(forgotten.count)")
+        if let line = added.first { flash("Noted: " + line.text) } else if let line = forgotten.first { flash("Forgot: " + line.text) }
+        if page.isMe, !added.isEmpty { enqueue { [weak self] in self?.writeMemory() } }
+    }
+
+    /// Writes on the Me page each thing Maple remembers that isn't on it yet, a line of ink below everything else, and
+    /// says what the page is for while it's empty. The ink is out of undo: it's Maple's to show, and it isn't undone away.
+    func writeMemory() -> Change? {
+        guard page.isMe else { return nil }
+        let written = Set(notes.compactMap(\.memory)), left = memories.memory.active.filter { $0.author == "maple" && !written.contains($0.id) }
+        var lines: [(id: String?, text: String)] = left.map { ($0.id, $0.text) }
+        if lines.isEmpty, canvas.drawing.strokes.isEmpty, notes.isEmpty { lines = [(nil, Self.meWelcome)] }
+        guard !lines.isEmpty else { return nil }
+        let pen = Handwriting.answers, base = Date(), bounds = canvas.drawing.bounds
+        var y = bounds.isEmpty ? Self.meStart.y : bounds.maxY + Self.meCap * 2, change = Change(undoable: false)
+        for (i, line) in lines.enumerated() {
+            guard let text = pen.writable(line.text) else { continue }
+            let wrapped = pen.wrap(text, cap: Self.meCap, width: Self.meWidth), origin = CGPoint(x: Self.meStart.x, y: y), date = base + Double(i) / 1000
+            change.add += pen.pen(wrapped, at: origin, cap: Self.meCap).map { AgentPen.stroke($0, width: AgentPen.width(at: 1), step: 2, date: date) }
+            var note = Note(mark: "memory", trigger: [], anchor: origin, zoom: 1, reading: "", reply: text, turn: 0,
+                            rect: pen.extent(wrapped, cap: Self.meCap).offsetBy(dx: origin.x, dy: origin.y), inked: date)
+            note.memory = line.id
+            change.notes.append(note)
+            y = (note.rect?.maxY ?? y) + Self.meCap * 1.6
+        }
+        return change
+    }
+
+    /// The line of the Me page that one straight stroke, `mark` in the page turned by `turn`, runs along.
+    func struckLine(_ mark: CGRect, by trigger: [String], turn: CGFloat) -> Note? {
+        guard page.isMe, trigger.count == 1, let stroke = canvas.drawing.strokes.first(where: { Self.id($0) == trigger[0] }) else { return nil }
+        let points = Self.points(stroke, every: 4).joined().map { $0 }
+        let length = zip(points, points.dropFirst()).reduce(CGFloat(0)) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) }
+        guard length <= hypot(mark.width, mark.height) * 1.3 else { return nil }
+        return notes.first { note in
+            guard note.mark == "memory" else { return false }
+            let line = Self.box(note, turn: turn), crossed = line.intersection(mark)
+            return !crossed.isNull && crossed.width >= line.width * 0.4 && mark.height <= max(line.height, Self.meCap) * 1.5
+        }
+    }
+
+    /// Keeps Memory in step with the Me page: a line struck or rubbed out is forgotten, and undoing that brings it back.
+    func reconcile() {
+        guard page.isMe else { return }
+        let here = Set(notes.filter { $0.memory != nil && !strokes(of: $0).isEmpty }.compactMap(\.memory))
+        let gone = lastShown.subtracting(here), back = here.subtracting(lastShown)
+        lastShown = here
+        guard !gone.isEmpty || !back.isEmpty else { return }
+        let struck = memories.change { memory in
+            memory.restore(back)
+            return memory.strike(gone)
+        }
+        if let line = struck.first { flash("Forgot: " + line.text) }
     }
 
     /// Keeps an answer as a quiet dot: a ?'s waits to be tapped; double dots and voice answers open at once.
@@ -623,6 +700,7 @@ final class Marks {
         for note in quiet where !bubbles.contains(where: { $0.note?.id == note.id }) {
             add(Bubble(anchor: note.anchor, zoom: note.zoom, turn: note.turn ?? 0, note: note))
         }
+        reconcile()
     }
 
     /// Fills an empty box, drawn level in the page turned by `turn`: with the agent's ink, a graph or figure the app works
@@ -630,7 +708,7 @@ final class Marks {
     /// beside it. A pixel grid shimmers in the box until it lands; if drawing fails, an orange dot at its corner tries
     /// again. `asked` is that question, when the strokes `reply` answer it: both go as the box fills.
     func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, turn: CGFloat, zoom: CGFloat,
-              asked: Note? = nil, reply: [String] = []) async {
+              asked: Note? = nil, reply: [String] = [], memory: [Memory.Line] = []) async {
         guard present(trigger) else { return }
         let done = shimmer(over: box, turn: turn)
         asking += 1
@@ -638,7 +716,7 @@ final class Marks {
         let start = ContinuousClock.now
         let anchor = Self.anchor(box, zoom).applying(CGAffineTransform(rotationAngle: -turn))
         do {
-            let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply)
+            let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, memory: memory)
             guard !closed else { return }
             guard present(trigger) else { return done() }
             if drawing.kind == "ask" {
@@ -673,7 +751,7 @@ final class Marks {
             let failed = add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
             failed.retry = { [weak self, weak failed] in
                 self?.remove(failed)
-                self?.run { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, turn: turn, zoom: zoom, asked: asked, reply: reply) }
+                self?.run { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, turn: turn, zoom: zoom, asked: asked, reply: reply, memory: memory) }
             }
         }
     }
@@ -810,7 +888,7 @@ final class Marks {
             defer { asking -= 1 }
             let start = ContinuousClock.now
             do {
-                let result = try await agent.edit(near: near, around: around, targets: targets)
+                let result = try await agent.edit(near: near, around: around, targets: targets, memory: memories.memory.lines)
                 logger.notice("edited targets=\(targets.count) edits=\(result.edits.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
                 let pictures = try await repainted(result, batch)
                 guard !closed else { return }
@@ -860,7 +938,7 @@ final class Marks {
             return box
         }
         let pointed: [(note: Note, gap: CGFloat)] = notes.compactMap { note in
-            guard note.inked != nil, note.mark != "frame" || note.source != nil, note.asked == nil else { return nil }
+            guard note.inked != nil, note.mark != "frame" || note.source != nil, note.asked == nil, note.mark != "memory" else { return nil }
             let ink = strokes(of: note)
             let box = note.picture != nil ? Self.box(note, turn: turn) : ink.reduce(CGRect.null) { $0.union(Self.bounds($1, turn: turn, zoom: zoom)) }
             guard !box.isNull, Self.touches(points, ink.flatMap { Self.points($0, every: reach / 4).joined() }, within: reach)

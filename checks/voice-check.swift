@@ -1,5 +1,5 @@
 // Offline: validates the transcription request, errors, cancellation and Spark's voice context with a URLProtocol stub.
-//   swiftc -swift-version 6 -parse-as-library Maple/{Transcribe,Muse,Agent,Drawing,Figure,Computed,Hershey}.swift checks/voice-check.swift -o /tmp/voice-check && /tmp/voice-check
+//   swiftc -swift-version 6 -parse-as-library Maple/{Transcribe,Muse,Memory,Agent,Drawing,Figure,Computed,Hershey}.swift checks/voice-check.swift -o /tmp/voice-check && /tmp/voice-check
 // On the simulator, compile with the same sources as canvas-check plus this file (instead of canvas-check), and put
 // MODEL_API_KEY=voice-check in the test app's Info.plist. Also checks squeeze cancellation, the toggle and saved page bubbles.
 import Foundation

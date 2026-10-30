@@ -4,6 +4,7 @@ import PencilKit
 nonisolated struct Page: Identifiable, Hashable {
     static let folder = URL.documentsDirectory.appending(path: "pages")
     static let aspect: CGFloat = 3 / 4  // card shape: the iPad held upright
+    static let sheet: CGFloat = 131_072  // how wide and tall a page is
     let url: URL
     var edited: Date  // when its ink or answers were last saved, or when it was made
     var name: String?  // what the person called it, or else what Maple did
@@ -14,21 +15,32 @@ nonisolated struct Page: Identifiable, Hashable {
     var contentFile: URL { FileManager.default.fileExists(atPath: stateFile.path) ? stateFile : ink }
     var nameFile: URL { url.appending(path: "name.txt") }  // the person's name for it, which Maple never changes
     var autoNameFile: URL { url.appending(path: "auto-name.txt") }  // Maple's, from the ink as it was then
+    var readFile: URL { url.appending(path: "read.txt") }  // on the Me page: touched when its ink was last read
     var pictures: URL { url.appending(path: "pictures") }  // what Muse Image painted and the app computed, by file name
     var viewportKey: String { "viewport-\(url.lastPathComponent)" }
     var title: String { name ?? "Untitled page" }
     /// Maple names a page again once its ink has changed, until the person names it.
     var needsName: Bool { !FileManager.default.fileExists(atPath: nameFile.path) && modified(autoNameFile) < modified(contentFile) }
 
-    /// Last written in first. Thumbnails and names written into the folder don't count as edits.
+    /// The page of what Maple remembers, pinned first in the gallery. It's a page like any other, but it can't be deleted.
+    static var me: Page { Page(url: folder.appending(path: "me"), edited: .distantPast) }
+    var isMe: Bool { url.lastPathComponent == "me" }
+    /// The person has written on the Me page since Maple last read it.
+    var unread: Bool { isMe && modified(readFile) < modified(contentFile) }
+
+    /// Last written in first, after the Me page. Thumbnails and names written into the folder don't count as edits.
     static func all() -> [Page] {
+        if !FileManager.default.fileExists(atPath: me.nameFile.path) {
+            try? FileManager.default.createDirectory(at: me.url, withIntermediateDirectories: true)
+            try? "Me".write(to: me.nameFile, atomically: true, encoding: .utf8)
+        }
         let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
         return urls.map { url in
             var page = Page(url: url, edited: .distantPast)
             page.edited = max(modified(page.contentFile), modified(page.notesFile), created(url))
             page.name = [page.nameFile, page.autoNameFile].lazy.compactMap { try? String(contentsOf: $0, encoding: .utf8) }.first
             return page
-        }.sorted { $0.edited > $1.edited }
+        }.sorted { $0.isMe != $1.isMe ? $0.isMe : $0.edited > $1.edited }
     }
 
     static func create() -> Page {
@@ -84,6 +96,14 @@ nonisolated struct Page: Identifiable, Hashable {
         return name != current
     }
 
+    /// What the person wrote on the Me page, one line each, read from their ink alone. Nil if it couldn't be read.
+    @concurrent func handwriting() async -> [String]? {
+        guard let muse = Muse.bundled, var drawing = try? load() else { return nil }
+        drawing.strokes.removeAll { !AgentPen.person($0) }
+        guard !drawing.strokes.isEmpty else { return [] }
+        return try? await Agent(muse: muse).readMe(page: Marks.png(drawing, drawing.bounds.insetBy(dx: -40, dy: -40)))
+    }
+
     func delete() throws {
         try Store.queue.sync { try FileManager.default.removeItem(at: url) }  // after any save still queued
         UserDefaults.standard.removeObject(forKey: viewportKey)
@@ -118,6 +138,35 @@ nonisolated struct Page: Identifiable, Hashable {
         }
         try? image?.pngData()?.write(to: cached, options: .atomic)
         return image
+    }
+}
+
+/// The one memory, in Documents. All of it changes here, on the main actor, and saves in order.
+final class Memories {
+    static let shared = Memories(file: URL.documentsDirectory.appending(path: "memory.json"))
+    let file: URL
+    private(set) var memory: Memory
+
+    init(file: URL) {
+        self.file = file
+        if let data = try? Data(contentsOf: file) {
+            if let saved = try? JSONDecoder().decode(Memory.self, from: data) {
+                memory = saved
+                return
+            }
+            try? data.write(to: file.deletingPathExtension().appendingPathExtension("unreadable.json"))  // never save over what we couldn't read
+        }
+        memory = Memory()
+    }
+
+    func change<Result>(_ edit: (inout Memory) -> Result) -> Result {
+        let result = edit(&memory)
+        let memory = memory, file = file
+        Store.queue.async {
+            do { try JSONEncoder().encode(memory).write(to: file, options: .atomic) }
+            catch { logger.error("memory save failed: \(error.localizedDescription, privacy: .public)") }
+        }
+        return result
     }
 }
 
