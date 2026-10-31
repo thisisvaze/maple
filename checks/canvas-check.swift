@@ -3,13 +3,14 @@
 //   sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > "$CHECK_DIR/Colors.swift"
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator -swift-version 6 \
 //     -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{CanvasController,QuickShape,Shape,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{CanvasController,QuickMenu,Export,QuickShape,Shape,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
 //   cp Maple/*.jhf Maple/hand.json "$CHECK_DIR/Check.app/"
 //   xcrun simctl spawn booted "$CHECK_DIR/Check.app/canvas-check"
 import PencilKit
+import UniformTypeIdentifiers
 
 @main
 struct Check {
@@ -217,6 +218,7 @@ struct Check {
         try await boxes()
         try me()
         try snapping()
+        try quickMenu()
         try savedHistory()
         try voicePlacement()
         print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame, edit brush")
@@ -681,6 +683,95 @@ struct Check {
 
     static func near(_ a: CGPoint, _ b: CGPoint) {
         precondition(hypot(a.x - b.x, a.y - b.y) < 0.75, "\(a) != \(b)")  // PencilKit rounds scroll offsets to pixels.
+    }
+
+    /// Three fingers down the page call Procreate's kind of menu, which copies the page for an AI as JSON, or as SVG.
+    static func quickMenu() throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = Page(url: folder, edited: .now)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        UserDefaults.standard.set([2150.0, 3100.0, 1.0], forKey: page.viewportKey)
+        let controller = open(page), canvas = controller.canvas, marks = controller.marks!, menu = controller.quickMenu!
+        precondition(canvas.panGestureRecognizer.maximumNumberOfTouches == 2, "three fingers don't pan the page")
+        precondition(controller.turner.gestureRecognizers?.contains { $0 === menu.swipe } == true && menu.swipe.minimumNumberOfTouches == 3)
+        precondition(canvas.accessibilityCustomActions?.map(\.name) == ["Copy for AI", "Copy SVG"], "and VoiceOver can reach the same")
+
+        // A page with the person's writing, an answer in Maple's ink, a picture, an edit mark, and something remembered.
+        marks.memories = Memories(file: folder.appending(path: "memory.json"))
+        marks.memories.change { $0.written(["Vegetarian"], page: "me") }
+        let theirs = PKStroke(ink: controller.pen.ink, path: AgentPen.stroke([CGPoint(x: 2000, y: 3000), CGPoint(x: 2100, y: 3040)], width: 2.72, step: 2).path)
+        let date = Date(), blue = AgentPen.stroke([CGPoint(x: 2120, y: 3000), CGPoint(x: 2180, y: 3000)], width: 3, step: 2, date: date)
+        let mark = PKStroke(ink: PKInk(.pen, color: AgentPen.coral), path: AgentPen.stroke([CGPoint(x: 2000, y: 3100), CGPoint(x: 2050, y: 3100)], width: 3.5, step: 2).path)
+        canvas.drawing = PKDrawing(strokes: [theirs, blue, mark])
+        let dot = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")!
+        var answer = Note(mark: "question", trigger: [Marks.id(theirs)], anchor: CGPoint(x: 2110, y: 2990), zoom: 1, reading: "2 + 2 ?", reply: "4", turn: 0,
+                          rect: CGRect(x: 2120, y: 2990, width: 60, height: 20), inked: date)
+        var picture = Note(mark: "frame", trigger: [], anchor: .zero, zoom: 1, reading: "a yard", reply: "a yard in spring", turn: 0.3, rect: CGRect(x: 1900, y: 2800, width: 120, height: 80))
+        picture.picture = try page.keep(dot, as: "png")
+        answer.turn = 0
+        marks.notes = [answer, picture]
+
+        // The JSON: everything, readable, and no edit marks.
+        let json = try JSONSerialization.jsonObject(with: Data(try Export.json(title: "Sums", viewport: [2150, 3100, 1, 0.5], drawing: canvas.drawing, notes: marks.notes, memory: marks.memories.memory).utf8)) as! [String: Any]
+        let memory = json["memory"] as! [[String: Any]], answers = json["answers"] as! [[String: Any]], ink = json["ink"] as! [[String: Any]]
+        precondition(json["title"] as? String == "Sums" && (json["about"] as? String)?.contains("Maple") == true, "it says what it is")
+        precondition(memory.map { $0["text"] as! String } == ["Vegetarian"] && memory[0]["from"] as? String == "the person", "what Maple remembers")
+        precondition(answers.map { $0["read"] as! String } == ["2 + 2 ?", "a yard"] && answers[0]["reply"] as? String == "4" && answers[1]["picture"] as? String == picture.picture, "every answer, read and replied")
+        precondition(ink.map { $0["by"] as! String } == ["person", "maple"], "the ink, without the edit mark: \(ink.map { $0["by"]! })")
+        precondition((ink[0]["points"] as! [[Double]]).count == 2, "a straight stroke comes out as its two ends")
+        precondition(((json["view"] as! [String: Any])["turn"] as! Double - 28.6).magnitude < 0.1, "the view, in degrees")
+
+        // The SVG: one path a stroke in its own colour, the picture under them, framed to it all.
+        let svg = Export.svg(drawing: canvas.drawing, notes: marks.notes, pictures: page.pictures)
+        final class Counter: NSObject, XMLParserDelegate {
+            var tags: [String: [[String: String]]] = [:]
+            func parser(_ p: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String] = [:]) { tags[name, default: []].append(attributes) }
+        }
+        let counter = Counter(), parser = XMLParser(data: Data(svg.utf8))
+        parser.delegate = counter
+        precondition(parser.parse(), "the SVG is well formed")
+        let paths = counter.tags["path"] ?? [], images = counter.tags["image"] ?? []
+        precondition(paths.map { $0["stroke"]! } == ["#232322", "#1F4596"], "the person's graphite and Maple's blue, no coral: \(paths.map { $0["stroke"]! })")
+        precondition(images.count == 1 && images[0]["href"]!.hasPrefix("data:image/png;base64,") && images[0]["transform"]!.contains("rotate(-17.18"), "the picture, turned as it lies")
+        let box = counter.tags["svg"]![0]["viewBox"]!.split(separator: " ").map { Double($0)! }
+        let lies = picture.rect!.applying(CGAffineTransform(rotationAngle: -0.3)).union(canvas.drawing.strokes[0].renderBounds)
+        precondition(CGRect(x: box[0], y: box[1], width: box[2], height: box[3]).contains(lies), "framed to the ink and the picture where it lies: \(box) \(lies)")
+
+        // Three fingers down, mostly straight, open it; sideways doesn't. The page goes back to where the third finger landed.
+        final class Fingers: UIPanGestureRecognizer {
+            var moved = CGPoint.zero
+            override var state: UIGestureRecognizer.State { get { .changed } set {} }
+            override func translation(in view: UIView?) -> CGPoint { moved }
+        }
+        let fingers = Fingers()
+        menu.swipe.third()
+        let landed = (controller.center, canvas.zoomScale)
+        canvas.zoomScale = 1.4
+        fingers.moved = CGPoint(x: 80, y: 80)
+        menu.swiped(fingers)
+        precondition(menu.panel.superview == nil, "a slant isn't a swipe down")
+        fingers.moved = CGPoint(x: 10, y: QuickMenu.reach + 10)
+        menu.swiped(fingers)
+        precondition(menu.panel.superview === controller.view && menu.shade.superview === controller.view, "open, over the page")
+        precondition(canvas.zoomScale == landed.1 && abs(controller.center.x - landed.0.x) < 0.01, "the page is back where the fingers found it")
+
+        // Each action copies and closes.
+        let board = UIPasteboard(name: UIPasteboard.Name("maple-check-\(UUID().uuidString)"), create: true)!
+        menu.copyJSON(to: board)
+        precondition(board.string?.contains("\"Vegetarian\"") == true && menu.shade.superview == nil && marks.lastTag?.text == "Copied for AI", "copied for an AI")
+        menu.open()
+        menu.copySVG(to: board)
+        precondition(board.data(forPasteboardType: UTType.svg.identifier).map { String(decoding: $0, as: UTF8.self) } == svg && board.string == svg, "copied as SVG, and as text")
+        menu.open()
+        menu.shade.sendActions(for: .touchDown)
+        precondition(menu.shade.superview == nil, "a tap anywhere else closes it")
+        UIPasteboard.remove(withName: board.name)
+        print("quick menu ok: three fingers down, JSON with memory and answers, SVG with pictures, copying, closing")
     }
 
     /// Draw, rest the pen, and it snaps: the page's side of what checks/shape-check.swift reads.

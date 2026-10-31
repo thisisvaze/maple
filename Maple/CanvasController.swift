@@ -60,6 +60,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     let history = History()
     var strokeStart: PKDrawing?
     var quickShape: QuickShape!
+    var quickMenu: QuickMenu!
     var marks: Marks!
     private(set) var voice: Voice?
 
@@ -160,6 +161,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         turner.addGestureRecognizer(twist)
         quickShape = QuickShape(controller: self)
         canvas.addGestureRecognizer(quickShape)
+        quickMenu = QuickMenu(controller: self)
         view.addInteraction(UIPencilInteraction(delegate: self))  // in the key window: the Pencil's taps reach no other (30 Oct probe)
         toolName.font = .preferredFont(forTextStyle: .headline)
         toolName.adjustsFontForContentSizeCategory = true
@@ -174,6 +176,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         super.viewDidLayoutSubviews()
         // One finger or a palm never moves the paper. Set here: PencilKit resets it to 1 on joining a window.
         canvas.panGestureRecognizer.minimumNumberOfTouches = 2
+        canvas.panGestureRecognizer.maximumNumberOfTouches = 2  // three fingers call the quick menu
         // Only a new screen size moves the page: a label or button laid out mid-pinch, like Jev's tag, must not reset the zoom.
         guard view.bounds.width > 0, view.bounds.height > 0, view.bounds.size != laidOutSize else { return }
         if laidOutSize != .zero {
