@@ -1,7 +1,30 @@
-pencil.wav is adapted from "Pencil #1" by Joseph SARDIN / BigSoundBank.
-Source: https://bigsoundbank.com/pencil-s0221.html
-Original audio: https://bigsoundbank.com/UPLOAD/mp3/0221.mp3
-License: CC0 1.0 — https://creativecommons.org/publicdomain/zero/1.0/
+pencil.wav is a generated paper-friction texture based on Skuzic's
+src/audio/touch.ts and ios/Skuzic/Audio/TouchEngine.swift by Aaditya Vaze.
+Motion smoothing in PencilSound.swift uses the same 40 ms time constant.
 
-Trimmed from 28.8–30.0 seconds, filtered, converted to mono 24 kHz PCM,
-normalized and crossfaded into a seamless loop. No runtime downloads.
+Generated offline by tools/render-pencil.py: 140 Hz paper grain, roughness
+0.85, 4.2 kHz low-pass, 700 Hz high-pass and a 5 dB peak at 3.2 kHz.
+Four seconds of mono 24 kHz PCM, with an equal-power seamless wrap.
+It contains no recorded strokes or pen lifts, and needs no runtime downloads.
+
+MIT License
+
+Copyright (c) 2026 Aaditya Vaze
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

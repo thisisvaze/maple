@@ -15,7 +15,8 @@ final class Turner: UIWindow {
         for touch in event.allTouches ?? [] where touch.type == .pencil {
             guard touch.view?.isDescendant(of: controller.canvas) == true else { continue }
             if controller.canvas.tool is PKInkingTool {
-                sound.touch(touch, in: controller.view)
+                let samples = touch.phase == .moved ? event.coalescedTouches(for: touch) ?? [touch] : [touch]
+                for sample in samples { sound.touch(sample, in: controller.view) }
             } else { sound.stop() }
         }
     }
