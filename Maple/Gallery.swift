@@ -11,6 +11,7 @@ struct Gallery: View {
     @State var renaming: Page?
     @State var newName = ""
     @AppStorage("voiceInput") var voiceInput = false
+    @AppStorage("aiEnabled") var aiEnabled = true
     @Namespace var zoom
 
     var body: some View {
@@ -99,12 +100,19 @@ struct Gallery: View {
             }
             // Maple names pages whose ink changed since it last did. This runs again whenever the list changes, so a page
             // is named soon after it closes; a name that fails is tried again then.
-            .task(id: pages) {
+            .task(id: [pages, aiEnabled] as [AnyHashable]) {
+                guard aiEnabled else { return }
                 var named = false
-                for page in pages where page.needsName { named = await page.nameFromInk() || named }
+                for page in pages where page.needsName {
+                    guard !Task.isCancelled, Marks.aiEnabled else { return }
+                    named = await page.nameFromInk() || named
+                }
+                guard !Task.isCancelled, Marks.aiEnabled else { return }
                 if named { pages = Page.all() }
                 for page in pages where page.unread {
+                    guard !Task.isCancelled, Marks.aiEnabled else { return }
                     guard let lines = await page.handwriting() else { continue }
+                    guard !Task.isCancelled, Marks.aiEnabled else { return }
                     Memories.shared.change { $0.written(lines, page: page.url.lastPathComponent) }
                     try? Data().write(to: page.readFile)
                 }
@@ -124,7 +132,7 @@ struct Gallery: View {
             }
         }
         .fullScreenCover(item: $open, onDismiss: { pages = Page.all() }) { page in
-            Paper(page: page, voiceEnabled: voiceInput)
+            Paper(page: page, voiceEnabled: voiceInput, aiEnabled: aiEnabled)
                 .ignoresSafeArea()
                 .overlay(alignment: .topLeading) {
                     Button { open = nil } label: {

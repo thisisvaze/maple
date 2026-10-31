@@ -7,6 +7,9 @@ nonisolated let logger = Logger(subsystem: "dev.maple", category: "marks")
 /// measured in the reading frame, the page turned the way it lies on screen, so writing that runs level on screen is level
 /// there at any page angle.
 final class Marks {
+    nonisolated static var aiEnabled: Bool { UserDefaults.standard.object(forKey: "aiEnabled") as? Bool ?? true }
+    private(set) var enabled = Marks.aiEnabled
+    var active: Bool { enabled && !closed && !Task.isCancelled }
     // Calibration knobs: tune with a real Pencil.
     static let pause: Duration = .milliseconds(600)  // how long the pen rests before a mark is read
     static let doubleDotReach: CGFloat = 4  // screen points two nib taps may land apart and still be one double dot
@@ -121,9 +124,12 @@ final class Marks {
         erasing = !writing
         settling = Task {
             try? await Task.sleep(for: Self.landing)
-            if !Task.isCancelled { settle() }
+            if !Task.isCancelled {
+                settling = nil // settle cancels the timer; a timer firing must not cancel itself
+                settle()
+            }
         }
-        guard writing, !closed else { return }
+        guard writing, active else { return }
         if editing {
             editWait = Task {
                 try? await Task.sleep(for: Self.editPause)
@@ -166,34 +172,56 @@ final class Marks {
         work.values.forEach { $0.cancel() }
     }
 
+    /// Drop uncommitted AI work, keeping the person's ink and every saved answer intact.
+    func setEnabled(_ enabled: Bool) {
+        guard self.enabled != enabled else { return }
+        self.enabled = enabled
+        guard !enabled else { return }
+        [waiting, flushing, editWait].forEach { $0?.cancel() }
+        work.values.forEach { $0.cancel() }
+        pending.removeAll()
+        editing.removeAll()
+        retrying.removeAll()
+        for bubble in bubbles where bubble.note == nil { remove(bubble) }
+        grids.forEach { $0.view.removeFromSuperview() }
+        grids.removeAll()
+        lastTag?.removeFromSuperview()
+    }
+
     /// Starts reading or answering, cancelled if the page closes first.
     func run(_ body: @escaping () async -> Void) {
+        guard active else { return }
         let key = UUID()
         work[key] = Task {
-            await body()
+            if active { await body() }
             work[key] = nil
         }
     }
 
     /// Queues a change for when the pen rests. It's worked out then, against the page as it is, and dropped if it returns nil.
     func enqueue(_ change: @escaping () -> Change?) {
+        guard active else { return }
         pending.append((.now, change))
         schedule()
     }
 
     func schedule() {
         flushing?.cancel()
-        guard let first = pending.first, !busy, !closed else { return }
+        guard let first = pending.first, !busy, active else { return }
         let due = min(lastInk + Self.rest, first.since + Self.restCap)
         flushing = Task {
             try? await Task.sleep(until: due)
-            if !Task.isCancelled { flush() }
+            if !Task.isCancelled {
+                flushing = nil
+                flush()
+            }
         }
     }
 
     /// Writes the queued changes now.
     func flush() {
         flushing?.cancel()
+        guard enabled else { return }
         let queued = pending
         pending = []
         for item in queued {
@@ -276,7 +304,7 @@ final class Marks {
 
     /// Reads the latest strokes for a mark and, if they're new, asks about them.
     func look() {
-        guard let agent, asking < Self.maxAsking, !closed else { return }
+        guard let agent, asking < Self.maxAsking, active else { return }
         let drawing = canvas.drawing, zoom = canvas.zoomScale, memory = memories.memory.lines
         let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
         let recent = drawing.strokes.filter(AgentPen.person).suffix(12).compactMap { stroke -> Grouping.Stroke? in
@@ -321,6 +349,7 @@ final class Marks {
                 let start = ContinuousClock.now
                 do {
                     let verdict = try await jev.mark(nearPNG)
+                    guard active else { return }
                     gesture = verdict.mark
                     sure = verdict.top == verdict.mark
                     tag(verdict)
@@ -392,14 +421,14 @@ final class Marks {
     /// meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?, trigger: [String],
              anchor: CGPoint, turn: CGFloat, zoom: CGFloat, view: (screen: [CGPoint], avoid: [[CGPoint]]), bubble: Bubble?, memory: [Memory.Line] = []) async {
-        guard present(trigger) else { return remove(bubble) }
+        guard active, present(trigger) else { return remove(bubble) }
         asking += 1
         defer { asking -= 1 }
         let start = ContinuousClock.now
         do {
             let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target, memory: memory)
             logger.notice("answered gesture=\(gesture, privacy: .public) passage=\(answer.passage) searched=\(answer.searched) calculated=\(answer.calculated) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
-            guard !closed else { return }
+            guard active else { return }
             learn(answer, evidence: answer.reading)
             guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
             let note = Note(mark: gesture, trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading, reply: answer.reply, turn: turn)
@@ -407,7 +436,7 @@ final class Marks {
             enqueue { [weak self] in self?.write(text, note: note, view: view, bubble: bubble) }
         } catch {
             logger.error("ask failed: \(error.localizedDescription, privacy: .public)")
-            guard !closed else { return }
+            guard active else { return }
             bubble?.retry = { [weak self, weak bubble] in
                 bubble?.retry = nil
                 self?.run { await self?.ask(agent, near, around, gesture: gesture, threads: threads, target: target, trigger: trigger,
@@ -418,7 +447,7 @@ final class Marks {
 
     /// Answers a spoken question about the visible page, using the same crops and saved threads as pen questions.
     func askVoice(_ transcript: String) async throws {
-        guard !closed, let agent, let view = screenView else { throw CancellationError() }
+        guard active, let agent, let view = screenView else { throw CancellationError() }
         try Task.checkCancellation()
         let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
         let area = screen.reduce(CGRect.null) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
@@ -429,7 +458,7 @@ final class Marks {
         try Task.checkCancellation()
         let answer = try await agent.ask(near: closeUp, around: around, gesture: "voice", threads: threads, target: nil, speech: transcript, memory: memories.memory.lines)
         try Task.checkCancellation()
-        guard !closed else { throw CancellationError() }
+        guard active else { throw CancellationError() }
         learn(answer, evidence: transcript)
         guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Muse.Failure("The answer was empty. Please try again.") }
         let safe = view.safeAreaLayoutGuide.layoutFrame
@@ -471,6 +500,7 @@ final class Marks {
     /// Takes what the Answer agent asks to remember or forget through Memory's check, against the person's words at this
     /// mark, and says what changed in the corner of the screen. The pen must be able to write it on the Me page.
     func learn(_ answer: Agent.Answer, evidence: String) {
+        guard active else { return }
         let proposals = (answer.remember ?? []).filter { Handwriting.answers.writable($0.text) != nil }
         guard !proposals.isEmpty || answer.forget?.isEmpty == false else { return }
         let (added, forgotten) = memories.change {
@@ -484,7 +514,7 @@ final class Marks {
     /// Writes on the Me page each thing Maple remembers that isn't on it yet, a line of ink below everything else, and
     /// says what the page is for while it's empty. The ink is out of undo: it's Maple's to show, and it isn't undone away.
     func writeMemory() -> Change? {
-        guard page.isMe else { return nil }
+        guard enabled, page.isMe else { return nil }
         let written = Set(notes.compactMap(\.memory)), left = memories.memory.active.filter { $0.author == "maple" && !written.contains($0.id) }
         var lines: [(id: String?, text: String)] = left.map { ($0.id, $0.text) }
         if lines.isEmpty, canvas.drawing.strokes.isEmpty, notes.isEmpty { lines = [(nil, Self.meWelcome)] }
@@ -709,7 +739,7 @@ final class Marks {
     /// again. `asked` is that question, when the strokes `reply` answer it: both go as the box fills.
     func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, turn: CGFloat, zoom: CGFloat,
               asked: Note? = nil, reply: [String] = [], memory: [Memory.Line] = []) async {
-        guard present(trigger) else { return }
+        guard active, present(trigger) else { return }
         let done = shimmer(over: box, turn: turn)
         asking += 1
         defer { asking -= 1 }
@@ -717,7 +747,7 @@ final class Marks {
         let anchor = Self.anchor(box, zoom).applying(CGAffineTransform(rotationAngle: -turn))
         do {
             let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, memory: memory)
-            guard !closed else { return }
+            guard active else { return }
             guard present(trigger) else { return done() }
             if drawing.kind == "ask" {
                 guard asked == nil, !drawing.question.isEmpty else { throw Plot.Failure("Muse asked again") }
@@ -725,7 +755,7 @@ final class Marks {
                 return askFirst(drawing, trigger: trigger, anchor: anchor, box: box, turn: turn, zoom: zoom)
             }
             let picture = try await paint(drawing, size: box.size)
-            guard !closed else { return }
+            guard active else { return }
             guard present(trigger) else { return done() }
             let date = Date(), strokes = try Self.drawn(drawing, in: box, turn: turn, zoom: zoom, date: date)
             logger.notice("drew kind=\(drawing.kind, privacy: .public) strokes=\(strokes.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
@@ -747,7 +777,7 @@ final class Marks {
         } catch {
             logger.error("draw failed: \(error.localizedDescription, privacy: .public)")
             done()
-            guard !closed else { return }
+            guard active else { return }
             let failed = add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
             failed.retry = { [weak self, weak failed] in
                 self?.remove(failed)
@@ -781,10 +811,16 @@ final class Marks {
     /// The picture a drawing fills its box of `size` with, kept with the page: worked out here from its equations, or
     /// painted by Muse Image. Nil for ink.
     func paint(_ drawing: Drawing, size: CGSize) async throws -> String? {
+        try Task.checkCancellation()
         guard drawing.painted else { return nil }
-        if drawing.kind == "computed" { return try page.keep(try await Self.rendered(drawing, size), as: "png") }
-        guard let painter else { throw Muse.Failure("The Meta API key is missing") }
-        return try page.keep(try await painter.paint(drawing.picture.prompt, ratio: size, search: drawing.picture.search), as: "webp")
+        let data: Data
+        if drawing.kind == "computed" { data = try await Self.rendered(drawing, size) }
+        else {
+            guard let painter else { throw Muse.Failure("The Meta API key is missing") }
+            data = try await painter.paint(drawing.picture.prompt, ratio: size, search: drawing.picture.search)
+        }
+        guard active else { throw CancellationError() }
+        return try page.keep(data, as: drawing.kind == "computed" ? "png" : "webp")
     }
 
     @concurrent nonisolated static func rendered(_ drawing: Drawing, _ size: CGSize) async throws -> Data { try drawing.computed.raster(in: size) }
@@ -795,13 +831,18 @@ final class Marks {
         let sources = try patches(result, batch).sources
         var files: [String: String] = [:]
         for edit in result.edits {
+            guard active else { throw CancellationError() }
             guard let n = Int(edit.target), batch.targets.indices.contains(n - 1) else { continue }
             let note = batch.targets[n - 1]
             if note.source?.kind == "picture", let instruction = edit.repaint?.trimmingCharacters(in: .whitespacesAndNewlines), !instruction.isEmpty {
                 guard let painter else { throw Muse.Failure("The Meta API key is missing") }
-                files[note.id] = try page.keep(try await painter.repaint(try marked(note, batch), instruction), as: "webp")
+                let data = try await painter.repaint(try marked(note, batch), instruction)
+                guard active else { throw CancellationError() }
+                files[note.id] = try page.keep(data, as: "webp")
             } else if let drawing = sources[note.id], drawing.kind == "computed", drawing.painted, drawing.computed != note.source?.computed, let box = note.rect {
-                files[note.id] = try page.keep(try await Self.rendered(drawing, box.size), as: "png")
+                let data = try await Self.rendered(drawing, box.size)
+                guard active else { throw CancellationError() }
+                files[note.id] = try page.keep(data, as: "png")
             }
         }
         return files
@@ -867,7 +908,7 @@ final class Marks {
     /// just fade, and marks on what's already being edited wait for the next edit; if Muse fails or changes nothing,
     /// they stay, and an orange dot by them tries again.
     func edit(_ ids: Set<String>) {
-        guard !closed, let batch = batch(ids) else { return }
+        guard active, let batch = batch(ids) else { return }
         let marks = Set(batch.marks.map(Self.id))
         retire { !$0.isDisjoint(with: marks) }  // this edit takes their marks
         editing.formUnion(batch.ids)
@@ -884,6 +925,7 @@ final class Marks {
         let done = { grids.forEach { $0() } }
         run { [self] in
             let (near, around, targets) = await request(batch)
+            guard active else { return }
             asking += 1
             defer { asking -= 1 }
             let start = ContinuousClock.now
@@ -891,7 +933,7 @@ final class Marks {
                 let result = try await agent.edit(near: near, around: around, targets: targets, memory: memories.memory.lines)
                 logger.notice("edited targets=\(targets.count) edits=\(result.edits.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
                 let pictures = try await repainted(result, batch)
-                guard !closed else { return }
+                guard active else { return }
                 try land(result, batch, pictures: pictures, done: done)
             } catch {
                 logger.error("edit failed: \(error.localizedDescription, privacy: .public)")
@@ -904,9 +946,10 @@ final class Marks {
     /// that tries the same batch again, until an edit takes them or they're erased.
     func failed(_ batch: Batch, done: () -> Void) {
         done()
+        guard active else { return }
         editing.subtract(batch.ids)
         let marks = Set(batch.marks.map(Self.id))
-        guard !closed, canvas.drawing.strokes.contains(where: { marks.contains(Self.id($0)) }) else { return }
+        guard canvas.drawing.strokes.contains(where: { marks.contains(Self.id($0)) }) else { return }
         let box = batch.marks.reduce(CGRect.null) { $0.union(Self.bounds($1, turn: batch.turn, zoom: batch.zoom)) }
         let dot = add(Bubble(anchor: Self.anchor(box, batch.zoom).applying(CGAffineTransform(rotationAngle: -batch.turn)), zoom: batch.zoom, turn: batch.turn))
         dot.retry = { [weak self] in self?.edit(marks) }  // which takes the dot away

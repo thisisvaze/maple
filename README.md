@@ -43,6 +43,10 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 
 Voice input uses the [file transcription endpoint](https://dev.meta.ai/docs/speech-to-text#transcribe-a-file): mono, 16-bit PCM WAV at 24 kHz, up to one minute. Hold a Pencil Pro squeeze to record and release to send. At the time limit, the microphone stops and waits for release. Releasing while microphone permission is pending cancels the start; squeeze again after granting permission. Cancelled squeezes discard the recording. The microphone button also supports tap to start/stop (and sends automatically at the limit); tap while processing to cancel. Leaving the page, backgrounding, audio interruptions, or disabling voice cancels it and removes temporary audio. Enabling the toggle alone never requests microphone access or records. Double-tap still switches tools, and a system-disabled squeeze is ignored. Only transcripts and answers are saved with the page.
 
+The **AI on / AI off** button beside Record pauses all model actions, including mark recognition, answers, drawings, edits, voice, automatic page naming and reading the Me page. It cancels requests and discards answers waiting to land; existing ink and answers stay. The setting persists across pages and launches. Drawing, erasing, QuickShape, saving and undo remain available. Record stays visible but disabled while AI is off.
+
+Pencil movement plays a quiet, bundled 55 KB recording through Apple's `AVAudioPlayer`. Screen speed changes playback rate and volume; pressure adds weight, with a speed-only fallback when pressure is unavailable. A short fade softens starts, pauses and lifts. Playback respects silent mode, mixes with music, and stops for voice capture, interruptions and backgrounding. There are no audio services or additional dependencies. The source is [Joseph Sardin's CC0 Pencil #1](https://bigsoundbank.com/pencil-s0221.html), trimmed and crossfaded into a mono loop; see `Maple/Pencil-LICENSE.txt`. Speaker volume and Pencil response still need listening and calibration on a physical iPad.
+
 ## Checks
 
 They run on the Mac, without the simulator.

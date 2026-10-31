@@ -1,0 +1,7 @@
+pencil.wav is adapted from "Pencil #1" by Joseph SARDIN / BigSoundBank.
+Source: https://bigsoundbank.com/pencil-s0221.html
+Original audio: https://bigsoundbank.com/UPLOAD/mp3/0221.mp3
+License: CC0 1.0 — https://creativecommons.org/publicdomain/zero/1.0/
+
+Trimmed from 28.8–30.0 seconds, filtered, converted to mono 24 kHz PCM,
+normalized and crossfaded into a seamless loop. No runtime downloads.

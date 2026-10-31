@@ -9,6 +9,17 @@ final class Turner: UIWindow {
     static let pagesButton: CGFloat = 66  // the Pages button's corner: 16 of padding and 44 of button, and a little more
     weak var controller: CanvasController?
 
+    override func sendEvent(_ event: UIEvent) {
+        super.sendEvent(event)
+        guard let controller, let sound = controller.pencilSound else { return }
+        for touch in event.allTouches ?? [] where touch.type == .pencil {
+            guard touch.view?.isDescendant(of: controller.canvas) == true else { continue }
+            if controller.canvas.tool is PKInkingTool {
+                sound.touch(touch, in: controller.view)
+            } else { sound.stop() }
+        }
+    }
+
     override var undoManager: UndoManager? { controller?.undoManager }  // a window would otherwise answer with its own
 
     /// Touches go through to what sits on the page in the app's window: an alert, its own buttons, the Pages corner. That
@@ -24,8 +35,12 @@ final class Turner: UIWindow {
 struct Paper: UIViewControllerRepresentable {
     let page: Page
     var voiceEnabled = false
+    var aiEnabled = true
     func makeUIViewController(context: Context) -> CanvasController { CanvasController(page: page) }
-    func updateUIViewController(_ controller: CanvasController, context: Context) { controller.setVoiceEnabled(voiceEnabled) }
+    func updateUIViewController(_ controller: CanvasController, context: Context) {
+        controller.setAIEnabled(aiEnabled)
+        controller.setVoiceEnabled(voiceEnabled)
+    }
 }
 
 /// One page of paper: Apple Pencil writes, two fingers pan, pinch and rotate, two-finger tap undoes, three-finger tap redoes,
@@ -63,6 +78,9 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var quickMenu: QuickMenu!
     var marks: Marks!
     private(set) var voice: Voice?
+    let controls = UIStackView()
+    let aiButton = UIButton(configuration: .tinted())
+    var pencilSound: PencilSound!
 
     // The responder chain and finger taps share the page's persistent history.
     override var undoManager: UndoManager? { history }
@@ -162,6 +180,23 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         quickShape = QuickShape(controller: self)
         canvas.addGestureRecognizer(quickShape)
         quickMenu = QuickMenu(controller: self)
+        pencilSound = PencilSound()
+        controls.spacing = 8
+        controls.alignment = .center
+        controls.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(controls)
+        controls.addArrangedSubview(aiButton)
+        NSLayoutConstraint.activate([
+            controls.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            controls.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            aiButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+        ])
+        aiButton.configuration?.cornerStyle = .capsule
+        aiButton.configuration?.imagePadding = 6
+        aiButton.configuration?.image = UIImage(systemName: "sparkles")
+        aiButton.accessibilityIdentifier = "ai-toggle"
+        aiButton.addAction(UIAction { [weak self] _ in self?.toggleAI() }, for: .primaryActionTriggered)
+        setAIEnabled(Marks.aiEnabled)
         view.addInteraction(UIPencilInteraction(delegate: self))  // in the key window: the Pencil's taps reach no other (30 Oct probe)
         toolName.font = .preferredFont(forTextStyle: .headline)
         toolName.adjustsFontForContentSizeCategory = true
@@ -220,6 +255,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        pencilSound.stop()
         voice?.cancel()
         marks.stop()
         saveNow()  // the gallery reads the file next, for the thumbnail
@@ -235,11 +271,33 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         loadViewIfNeeded()
         if enabled, loadError == nil {
             if voice == nil { voice = Voice(controller: self) }
+            voice?.button.isEnabled = marks.enabled
         } else {
             voice?.cancel()
             voice?.button.removeFromSuperview()
             voice = nil
         }
+    }
+
+    func toggleAI() {
+        let enabled = !marks.enabled
+        UserDefaults.standard.set(enabled, forKey: "aiEnabled")
+        setAIEnabled(enabled)
+    }
+
+    func setAIEnabled(_ enabled: Bool) {
+        loadViewIfNeeded()
+        marks.setEnabled(enabled)
+        if !enabled {
+            voice?.cancel()
+            if brushing { canvas.tool = pen }
+        }
+        voice?.button.isEnabled = enabled
+        aiButton.configuration?.title = enabled ? "AI on" : "AI off"
+        aiButton.configuration?.baseForegroundColor = enabled ? Marks.ink : .secondaryLabel
+        aiButton.accessibilityLabel = "AI assistance"
+        aiButton.accessibilityValue = enabled ? "On" : "Off"
+        aiButton.accessibilityHint = enabled ? "Turns off all AI actions and cancels pending requests." : "Turns on AI assistance."
     }
 
     /// The page point in the middle of the screen; survives rotation and different screen sizes.
@@ -322,7 +380,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     /// Pen, then eraser, then the edit brush, then the pen again, named at the top of the screen for a moment.
     func cycle() {
-        let (tool, name): (any PKTool, String) = if canvas.tool is PKEraserTool { (brush, "Edit") } else if brushing { (pen, "Pen") } else { (eraser, "Eraser") }
+        let (tool, name): (any PKTool, String) = if canvas.tool is PKEraserTool { marks.enabled ? (brush, "Edit") : (pen, "Pen") } else if brushing { (pen, "Pen") } else { (eraser, "Eraser") }
         canvas.tool = tool
         toolName.layer.removeAllAnimations()
         toolName.text = name
@@ -443,6 +501,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     @objc func saveNow() {
+        pencilSound.stop()
         finishStroke()
         marks.flush()  // what Maple was waiting to write goes in now
         saveTask?.cancel()

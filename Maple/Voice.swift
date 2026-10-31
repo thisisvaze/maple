@@ -22,10 +22,8 @@ import UIKit
         button.accessibilityIdentifier = "voice-input"
         button.addAction(UIAction { [weak self] _ in self?.tap() }, for: .primaryActionTriggered)
         button.translatesAutoresizingMaskIntoConstraints = false
-        controller.view.addSubview(button)
+        controller.controls.addArrangedSubview(button)
         NSLayoutConstraint.activate([
-            button.trailingAnchor.constraint(equalTo: controller.view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            button.bottomAnchor.constraint(equalTo: controller.view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
         ])
         NotificationCenter.default.addObserver(self, selector: #selector(resignActive), name: UIApplication.willResignActiveNotification, object: nil)
@@ -35,6 +33,7 @@ import UIKit
     }
 
     func squeeze(_ phase: UIPencilInteraction.Phase) {
+        guard controller?.marks.enabled == true else { return }
         switch phase {
         case .began:
             guard state == .idle else { return }
@@ -53,6 +52,7 @@ import UIKit
     }
 
     func tap() {
+        guard controller?.marks.enabled == true else { return }
         switch state {
         case .idle:
             state = .permission
@@ -156,6 +156,7 @@ import UIKit
     }
 
     private func update() {
+        controller?.pencilSound?.suspended = [.permission, .recording, .ready].contains(state)
         let (title, symbol, hint): (String, String, String) = switch state {
         case .idle: ("Record", "mic", "Squeeze and hold Apple Pencil Pro to record, then release to send. Or tap here to start and stop.")
         case .permission: ("Cancel", "xmark", "Cancel microphone setup.")

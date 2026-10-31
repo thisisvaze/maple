@@ -3,11 +3,11 @@
 //   sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > "$CHECK_DIR/Colors.swift"
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator -swift-version 6 \
 //     -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{CanvasController,QuickMenu,Export,QuickShape,Shape,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{CanvasController,PencilSound,QuickMenu,Export,QuickShape,Shape,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
-//   cp Maple/*.jhf Maple/hand.json "$CHECK_DIR/Check.app/"
+//   cp Maple/*.jhf Maple/hand.json Maple/pencil.wav "$CHECK_DIR/Check.app/"
 //   xcrun simctl spawn booted "$CHECK_DIR/Check.app/canvas-check"
 import PencilKit
 import UniformTypeIdentifiers

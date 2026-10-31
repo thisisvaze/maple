@@ -43,6 +43,10 @@ struct Check {
         print("voice request, response, errors, cancellation and Spark context ok")
 
         #if canImport(UIKit)
+        let previousAI = UserDefaults.standard.object(forKey: "aiEnabled")
+        UserDefaults.standard.removeObject(forKey: "aiEnabled")
+        defer { UserDefaults.standard.set(previousAI, forKey: "aiEnabled") }
+        precondition(Marks.aiEnabled, "AI defaults on")
         let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let page = Page(url: folder, edited: .now)
@@ -60,7 +64,8 @@ struct Check {
         let permission = AVAudioApplication.shared.recordPermission
         controller.setVoiceEnabled(true)
         let voice = controller.voice!
-        precondition(voice.state == .idle && voice.button.superview === controller.view)
+        precondition(voice.state == .idle && voice.button.superview === controller.controls)
+        precondition(controller.controls.arrangedSubviews == [controller.aiButton, voice.button], "AI sits beside Record")
         precondition(AVAudioApplication.shared.recordPermission == permission, "enabling doesn't ask for permission")
         voice.squeeze(.changed)
         voice.squeeze(.ended)
@@ -103,6 +108,66 @@ struct Check {
         Store.queue.sync {}
         let saved = try page.loadNotes()
         precondition(saved.last?.mark == "voice", "voice answers persist")
+        let marks = controller.marks!
+        let drawing = controller.canvas.drawing.dataRepresentation(), notes = marks.notes
+        var queuedLanded = false, staleLanded = false, disabledRan = false
+        marks.enqueue { queuedLanded = true; return .init() }
+        var resume: CheckedContinuation<Void, Never>?
+        marks.run {
+            await withCheckedContinuation { resume = $0 }
+            marks.enqueue { staleLanded = true; return .init() }
+        }
+        while resume == nil { await Task.yield() }
+        let oldWork = Array(marks.work.values)
+        marks.add(Bubble(anchor: .zero, zoom: 1, turn: 0))
+        _ = marks.shimmer(over: CGRect(x: 0, y: 0, width: 100, height: 100), turn: 0)
+        controller.voice!.squeeze(.began)
+        precondition(controller.pencilSound.suspended, "microphone setup mutes pencil playback")
+        controller.toggleAI()
+        precondition(!Marks.aiEnabled && !marks.enabled && !controller.voice!.button.isEnabled)
+        precondition(controller.voice!.state == .idle && !controller.pencilSound.suspended, "AI off cancels voice setup")
+        precondition(marks.pending.isEmpty && marks.grids.isEmpty && marks.bubbles.allSatisfy { $0.note != nil })
+        marks.run { disabledRan = true }
+        marks.penUp(writing: true)
+        marks.look()
+        marks.edit()
+        controller.voice!.squeeze(.began)
+        precondition(controller.voice!.state == .idle, "AI off blocks squeeze recording")
+        do { try await marks.askVoice(transcript); preconditionFailure("AI off accepted a voice question") } catch {}
+        let renamed = await page.nameFromInk(), handwriting = await page.handwriting()
+        precondition(!renamed, "AI off blocks automatic naming")
+        precondition(handwriting == nil, "AI off blocks memory reading")
+        controller.saveNow()
+        precondition(controller.canvas.drawing.dataRepresentation() == drawing && marks.notes == notes, "AI off preserves saved content")
+        precondition(!queuedLanded && !disabledRan)
+        let reopened = CanvasController(page: page)
+        reopened.loadViewIfNeeded()
+        precondition(!reopened.marks.enabled, "new pages inherit the saved AI setting")
+        controller.cycle()
+        controller.cycle()
+        precondition(!controller.brushing, "AI off skips the edit brush")
+        controller.toggleAI()
+        resume?.resume()
+        for task in oldWork { await task.value }
+        marks.flush()
+        precondition(!staleLanded && marks.enabled && controller.voice!.button.isEnabled, "a cancelled result stays discarded after AI is re-enabled")
+        marks.penDown()
+        marks.enqueue { queuedLanded = true; return .init() }
+        marks.penUp(writing: false)
+        try await Task.sleep(for: .seconds(1.4))
+        precondition(queuedLanded, "AI on still lands queued answers after the pen rests")
+        let silent = PencilSound.response(speed: 0, force: 1, maximumForce: 1)
+        let slow = PencilSound.response(speed: 40, force: 0.2, maximumForce: 1)
+        let fast = PencilSound.response(speed: 700, force: 0.2, maximumForce: 1)
+        let heavy = PencilSound.response(speed: 700, force: 0.9, maximumForce: 1)
+        precondition(silent.volume == 0 && fast.volume > slow.volume && fast.rate > slow.rate && heavy.volume > fast.volume)
+        precondition(PencilSound.response(speed: 200, force: 0, maximumForce: 0).volume > 0, "speed works without a pressure sensor")
+        precondition(PencilSound.response(speed: .infinity, force: .nan, maximumForce: 1).volume == 0)
+        let bounded = PencilSound.response(speed: 1e9, force: 1e9, maximumForce: 1)
+        precondition(bounded.volume <= 0.16 && bounded.rate <= 1.35)
+        let sound = try AVAudioPlayer(contentsOf: Bundle.main.url(forResource: "pencil", withExtension: "wav")!)
+        precondition(sound.duration > 1 && sound.duration < 1.3 && sound.numberOfChannels == 1, "the compact loop decodes on iOS")
+        print("AI off, cancellation, persistence, controls and pencil sound response ok")
         let count = controller.marks.notes.count
         controller.voice!.squeeze(.began)
         controller.viewWillDisappear(false)

@@ -83,6 +83,7 @@ nonisolated struct Page: Identifiable, Hashable {
     /// Muse names the page from all its ink, level as it last lay on screen, and what Maple read in the marks it answered.
     /// True when the name changed or was cleared: a page with no ink left goes back to Untitled.
     @concurrent func nameFromInk() async -> Bool {
+        guard Marks.aiEnabled, !Task.isCancelled else { return false }
         guard let muse = Muse.bundled, let drawing = try? load() else { return false }
         guard !drawing.strokes.isEmpty else { return (try? FileManager.default.removeItem(at: autoNameFile)) != nil }
         let v = UserDefaults.standard.array(forKey: viewportKey) as? [Double] ?? []
@@ -91,17 +92,22 @@ nonisolated struct Page: Identifiable, Hashable {
         let png = Marks.png(level, level.bounds.insetBy(dx: -40, dy: -40))
         let readings = ((try? loadNotes()) ?? []).map(\.reading)
         let current = try? String(contentsOf: autoNameFile, encoding: .utf8)
+        guard Marks.aiEnabled, !Task.isCancelled else { return false }
         guard let name = try? await Agent(muse: muse).name(page: png, readings: readings, current: current) else { return false }
+        guard Marks.aiEnabled, !Task.isCancelled else { return false }
         try? name.write(to: autoNameFile, atomically: true, encoding: .utf8)  // fails, rightly, if the page was deleted meanwhile
         return name != current
     }
 
     /// What the person wrote on the Me page, one line each, read from their ink alone. Nil if it couldn't be read.
     @concurrent func handwriting() async -> [String]? {
+        guard Marks.aiEnabled, !Task.isCancelled else { return nil }
         guard let muse = Muse.bundled, var drawing = try? load() else { return nil }
         drawing.strokes.removeAll { !AgentPen.person($0) }
         guard !drawing.strokes.isEmpty else { return [] }
-        return try? await Agent(muse: muse).readMe(page: Marks.png(drawing, drawing.bounds.insetBy(dx: -40, dy: -40)))
+        let png = Marks.png(drawing, drawing.bounds.insetBy(dx: -40, dy: -40))
+        guard Marks.aiEnabled, !Task.isCancelled else { return nil }
+        return try? await Agent(muse: muse).readMe(page: png)
     }
 
     func delete() throws {
