@@ -1,0 +1,29 @@
+# Checks
+
+What each check covers, and the timings measured along the way. The commands that build and run them are in the [README](../README.md#checks) and in each file's header.
+
+`checks/pipeline-check.swift` runs on an iPad simulator. It writes "x² = 49 ?", and "triangle" with an empty box under it, as PencilKit strokes and sends them through the app's own grouping, red crops, Jev, Muse and Maple's pen. Offline it writes a known answer in ink beside the ? and renders an edit before and after; with keys, Muse's own answer too. 29 Oct: the ? was answered in 4.6 s; the box was read and filled with a triangle in 7.0 s.
+
+`checks/canvas-check.swift` checks rotation around the fingers, screen coverage, bubble alignment, viewport restoration, resizing, undo/redo, Maple's ink surviving a reload, undo by stroke id, writing only while the pen rests, fading and scratching out answers, the reading frame, and the edit brush (tool cycle, brush width, timer, targets, landing and undo) on an iPad simulator without model keys. It also checks 100 saved history steps, redo across reloads, compact stroke deltas, partial erasure, answer notes, corrupt-save protection, voice bubble placement on rotated and zoomed pages, the orb geometry and vector layers, stable voice-button widths, tool selection and Maple-off behavior.
+
+The edit checks also cover moving and resizing two generated objects together on a rotated, zoomed page, retaining picture files, scaling stored parts, one undo/redo and persistence. Invalid coordinates, overlaps and changes made during a request leave the whole batch unchanged. Mocked voice edits cover the recording hold, captured selection, clarification and a follow-up instruction. Live model interpretation of these combined edits and the physical Pencil/microphone interaction still need checking on iPad.
+
+`checks/recognition-check.swift` is a recognition diagnostic on an iPad simulator: real PencilKit crops, rotated numbers, and a genuine 3D control. Without a key it only renders fixtures and checks geometry; with a key it records live readings.
+
+`checks/device/CanvasChecks.swift` covers the iPad erase crash: PencilKit can split one stroke into pieces sharing its creation date and random seed. History now compares and restores all pieces of a logical stroke together, including an unchanged sibling, instead of treating those IDs as unique. The device check covers split erasure, erasing one piece again, Maple's replacement, undo/redo and reopening the saved page. It also checks that Maple's ink stays queued during overlapping pinch/rotation and lands once both end; the writing reveal remains touch-through. User gestures themselves still need a hands-on check.
+
+`checks/device/LoadingChecks.swift` animates zoom and rotation over three 600 × 400 image loaders and three small orbs on the physical iPad. Image textures now keep four vector paths and animate opacity; zoom never changes their bitmap scale or repaints the whole box. Orbs update their existing vector layers directly. On the M5 iPad, the five-second benchmark's 95th-percentile frame interval fell from 58.3 ms to 16.7 ms, with frames over 33 ms falling from 58 to zero. The check also covers retained paths, constant orb size, touch-through, hiding, foreground pause/resume and removal.
+
+`checks/voice-check.swift` uses mocked API responses to check multipart audio uploads, transcription errors, cancellation, and spoken questions with page images sent to Spark. On a simulator it also checks that voice starts off, enabling doesn't request microphone permission, releasing or canceling a squeeze during setup prevents a late microphone start, disabling/backgrounding/page close cancels, and answers persist as open bubbles, and that a spoken drawing frames a box clear of the person's ink and fills it from the request. A live probe on 2 Nov called `draw_box` for a graph, a wireframe, an orbital and a triangle (2–5 s), and not for two plain questions. A live synthetic WAV was transcribed in 1.8 s on 29 Oct; physical microphone capture is covered by the device check below.
+
+2 Nov, physical iPad: `checks/device/AudioChecks.swift` started the real microphone through the Record button three times, checked the advancing recording timer, interrupted capture from a background audio queue and verified that each new WAV was removed. This reproduces the previously crashing audio-engine callback; the same callback regression now passes in `voice-check.swift`. Run `xcodegen`, then `xcodebuild test -project Maple.xcodeproj -scheme Maple -destination 'id=<iPad UDID>' -only-testing:MapleDeviceChecks` after granting Maple microphone access. The hardware check cancels every recording without uploading audio. The device recording check runs once with each tool selected. Pencil squeeze and an end-to-end spoken answer still need a hands-on check.
+
+## Timings
+
+28 Oct, low effort: reading "2 + 2 = ?" took 1.9–2.3 s and about 100–200 output tokens (at the API's default high effort, "say hi" took 678). Maple read "x² = 49 ?" as a question and answered "x = 7 or x = -7" in 2.6 s, left plain writing alone in 2.3 s, and explained a double-dotted word in 3.9 s.
+
+29 Oct, with Jev in front: Jev named a ? in 0.21 s and plain writing in 0.13 s; Muse answered the ? in 4.0 s in all (2.5 s once answers dropped the nudge and hint), drew a labeled water cycle in 24 s and plotted y = x^2 - 4 in 4.0 s (those drawing measurements used medium effort).
+
+29 Oct, minimal effort: the ? answered in 2.6–2.9 s, a double dot in 3.8 s, the Gettysburg Address as exact text in 5.2 s; an edit relabeling a drawing's button took 4.7 s and rewriting an answer 6.4 s.
+
+3 Nov: "why is e^iπ = −1 ??" was answered by Muse Wonder at medium effort in 15 to 18 s.
