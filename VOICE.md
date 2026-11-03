@@ -31,7 +31,7 @@ Examples use real-looking numbers (28.59, 3.18 m, 17.8 m/s at 41°), not round o
 
 ## In the app
 
-- **It's just "Maple".** The app never needs the word AI. Maple says "I" only in its own ink and voice (the Me page, its replies). Buttons, settings and errors stay plain.
+- **It's just "Maple".** The app never needs the word AI. Maple says "I" only in what it writes (the Me page, its replies). Buttons, settings and errors stay plain. Maple never speaks aloud, so videos never give it a voice.
 - **A few words.** "Noted: you don't drive". "Updated together". "Couldn't hear that. Try again."
 - **An error says what happened, then what to do.** "The microphone is off for Maple. Turn it on in Settings."
 - **A destructive action names the thing and the consequence.** "Delete these pages?" then "This can't be undone."
