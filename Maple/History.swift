@@ -69,17 +69,21 @@ final class History: UndoManager {
         var empty: Bool { positions.isEmpty && notePositions.isEmpty }
 
         init(_ state: State, comparedTo other: State) {
-            let strokes = other.drawing.strokes, byID = Dictionary(uniqueKeysWithValues: strokes.map { (Marks.id($0), $0) })
+            let byID = Dictionary(grouping: other.drawing.strokes, by: Marks.id)
             let notes = Dictionary(uniqueKeysWithValues: other.notes.map { ($0.id, $0) })
-            positions = state.drawing.strokes.indices.filter { i in
-                let s = state.drawing.strokes[i]
-                guard let old = byID[Marks.id(s)] else { return true }
-                // PencilKit copies stroke wrappers but shares unchanged paths.
-                if #available(iOS 27, *), s.renderGroupID != old.renderGroupID || s.renderState != old.renderState { return true }
-                return (s.path as PKStrokePathReference) !== (old.path as PKStrokePathReference)
-                    || s.ink.inkType != old.ink.inkType || !s.ink.color.isEqual(old.ink.color)
-                    || s.transform != old.transform || s.mask?.cgPath != old.mask?.cgPath
-            }
+            // Pixel erasure splits one logical stroke into pieces with the same ID; undo replaces the whole group.
+            let changed = Set(Dictionary(grouping: state.drawing.strokes, by: Marks.id).compactMap { id, pieces -> String? in
+                guard let old = byID[id], old.count == pieces.count else { return id }
+                let different = zip(pieces, old).contains { s, old in
+                    // PencilKit copies stroke wrappers but shares unchanged paths.
+                    if #available(iOS 27, *), s.renderGroupID != old.renderGroupID || s.renderState != old.renderState { return true }
+                    return (s.path as PKStrokePathReference) !== (old.path as PKStrokePathReference)
+                        || s.ink.inkType != old.ink.inkType || !s.ink.color.isEqual(old.ink.color)
+                        || s.transform != old.transform || s.mask?.cgPath != old.mask?.cgPath
+                }
+                return different ? id : nil
+            })
+            positions = state.drawing.strokes.indices.filter { changed.contains(Marks.id(state.drawing.strokes[$0])) }
             notePositions = state.notes.indices.filter { notes[state.notes[$0].id] != state.notes[$0] }
             var kept = 0
             let offsets = state.drawing.strokes.map { stroke in
@@ -144,8 +148,7 @@ final class History: UndoManager {
         func validated() throws -> Self {
             guard version == 1, past.count + future.count <= 100 else { throw CocoaError(.fileReadCorruptFile) }
             for state in [current] + (past + future).flatMap({ [$0.before.state, $0.after.state] }) {
-                guard Set(state.drawing.strokes.map(Marks.id)).count == state.drawing.strokes.count,
-                      Set(state.notes.map(\.id)).count == state.notes.count else { throw CocoaError(.fileReadCorruptFile) }
+                guard Set(state.notes.map(\.id)).count == state.notes.count else { throw CocoaError(.fileReadCorruptFile) }
             }
             for patch in (past + future).flatMap({ [$0.before, $0.after] }) {
                 guard patch.positions.count == patch.state.drawing.strokes.count,

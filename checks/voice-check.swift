@@ -5,6 +5,7 @@
 import Foundation
 #if canImport(UIKit)
 import AVFoundation
+import PencilKit
 import UIKit
 #endif
 
@@ -39,8 +40,15 @@ struct Check {
         cancelled.cancel()
         do { _ = try await cancelled.value; preconditionFailure("cancelled upload accepted") } catch {}
         let reply = try await Agent(muse: Muse(key: "voice-check")).ask(near: Data([1]), around: Data([2]), gesture: "voice", threads: [], target: nil, speech: transcript)
-        precondition(reply.reply == "4")
-        print("voice request, response, errors, cancellation and Spark context ok")
+        precondition(reply.reply == "4" && reply.boxes.isEmpty)
+        let drawn = try await Agent(muse: Muse(key: "voice-check")).ask(near: Data([1]), around: Data([2]), gesture: "voice", threads: [], target: nil, speech: "Draw a triangle")
+        precondition(drawn.reply.isEmpty && drawn.boxes.count == 1 && drawn.boxes[0].request == "a triangle" && drawn.boxes[0].width == 300,
+                     "a spoken drawing comes back as a box to draw, not words")
+        let edited = try await Agent(muse: Muse(key: "voice-check")).edit(near: Data([1]), around: Data([2]),
+            targets: [.init(id: "1", kind: "picture", at: [1, 2, 3, 4], overview: [10, 20, 30, 40])],
+            speech: "Move this one", previous: "Which picture?")
+        precondition(edited.edits.isEmpty && edited.question == "Where should it go?", "ambiguity returns a question without edits")
+        print("voice request, response, errors, cancellation, Spark context and draw_box ok")
 
         #if canImport(UIKit)
         let previousAI = UserDefaults.standard.object(forKey: "aiEnabled")
@@ -67,17 +75,33 @@ struct Check {
         precondition(voice.state == .idle && voice.button.superview === controller.controls)
         precondition(controller.controls.arrangedSubviews == [controller.aiButton, voice.button], "AI sits beside Record")
         precondition(AVAudioApplication.shared.recordPermission == permission, "enabling doesn't ask for permission")
+        // Audio-engine/session notifications arrive on their own queues when Record changes the audio category.
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                precondition(!Thread.isMainThread)
+                NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: nil)
+                NotificationCenter.default.post(name: AVAudioSession.routeChangeNotification, object: nil,
+                    userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.newDeviceAvailable.rawValue])
+                NotificationCenter.default.post(name: AVAudioSession.interruptionNotification, object: nil)
+                done.resume()
+            }
+        }
+        await Task.yield()
+        precondition(voice.state == .idle, "off-main audio notifications are safe and leave voice idle")
+        print("background audio-engine, route and interruption callbacks ok")
         voice.squeeze(.changed)
         voice.squeeze(.ended)
         precondition(voice.state == .idle, "a squeeze must begin before it can send")
         voice.squeeze(.began)
         precondition(voice.state == .permission)
+        precondition(controller.marks.voiceActive, "recording setup holds pending coral edits")
         voice.squeeze(.changed)
         voice.squeeze(.began)
         precondition(voice.state == .permission, "held or repeated squeeze events don't restart setup")
         voice.squeeze(.ended)
         await Task.yield()
         precondition(voice.state == .idle, "release during permission setup cancels a late microphone start")
+        precondition(!controller.marks.voiceActive, "cancelling releases the hold without executing marks")
         precondition(AVAudioApplication.shared.recordPermission == permission)
         voice.squeeze(.began)
         voice.squeeze(.cancelled)
@@ -109,6 +133,28 @@ struct Check {
         let saved = try page.loadNotes()
         precondition(saved.last?.mark == "voice", "voice answers persist")
         let marks = controller.marks!
+        // A spoken drawing: Maple frames a box in its own pen clear of the person's ink, then fills it like a drawn box.
+        let words = PKStroke(ink: PKInk(.pen, color: .black), path: PKStrokePath(controlPoints: (0 ... 40).map {
+            PKStrokePoint(location: CGPoint(x: 120 + CGFloat($0) * 4, y: 300), timeOffset: Double($0) * 0.01, size: CGSize(width: 3, height: 3),
+                          opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }, creationDate: Date()))
+        controller.canvas.drawing.strokes.append(words)
+        let before = marks.notes.count
+        try await marks.askVoice("Draw a triangle")
+        precondition(marks.notes.count == before, "an empty reply with a box opens no bubble")
+        marks.flush()
+        let frame = controller.canvas.drawing.strokes.last!
+        precondition(AgentPen.wrote(frame) && !frame.renderBounds.intersects(words.renderBounds), "the frame is Maple's ink, clear of the person's")
+        for _ in 0 ..< 200 where !marks.notes.contains(where: { $0.mark == "frame" }) {
+            try await Task.sleep(for: .milliseconds(50))
+            marks.flush()
+        }
+        let filled = marks.notes.last!
+        precondition(filled.mark == "frame" && filled.trigger == [Marks.id(frame)] && filled.reply == "A triangle", "the box fills: \(filled)")
+        let ink = marks.strokes(of: filled)
+        precondition(!ink.isEmpty && ink.allSatisfy { frame.renderBounds.insetBy(dx: -4, dy: -4).contains($0.renderBounds) }, "the drawing sits in its frame")
+        controller.canvas.drawing.strokes.removeAll { Marks.id($0) == Marks.id(words) }
+        print("voice draw_box: frame placement, fill and request ok")
         let drawing = controller.canvas.drawing.dataRepresentation(), notes = marks.notes
         var queuedLanded = false, staleLanded = false, disabledRan = false
         marks.enqueue { queuedLanded = true; return .init() }
@@ -156,16 +202,11 @@ struct Check {
         marks.penUp(writing: false)
         try await Task.sleep(for: .seconds(1.4))
         precondition(queuedLanded, "AI on still lands queued answers after the pen rests")
-        let silent = PencilSound.volume(speed: 0, force: 1, maximumForce: 1)
-        let slow = PencilSound.volume(speed: 40, force: 0.2, maximumForce: 1)
-        let fast = PencilSound.volume(speed: 700, force: 0.2, maximumForce: 1)
-        let heavy = PencilSound.volume(speed: 700, force: 0.9, maximumForce: 1)
-        precondition(silent == 0 && fast > slow && heavy > fast)
-        precondition(PencilSound.volume(speed: 200, force: 0, maximumForce: 0) > 0, "speed works without a pressure sensor")
-        precondition(PencilSound.volume(speed: .infinity, force: .nan, maximumForce: 1) == 0)
-        precondition(PencilSound.volume(speed: 1e9, force: 1e9, maximumForce: 1) <= 0.16)
-        let sound = try AVAudioPlayer(contentsOf: Bundle.main.url(forResource: "pencil", withExtension: "wav")!)
-        precondition(abs(sound.duration - 4) < 0.01 && sound.numberOfChannels == 1, "the continuous paper texture decodes on iOS")
+        // The synth's own response is measured in checks/pencil-check.swift; here, what the app feeds it, and that it builds.
+        precondition(PencilSynth.loudness(0) == 0 && PencilSynth.loudness(700) > PencilSynth.loudness(40))
+        precondition(PencilSound.pressure(force: 0, maximumForce: 0) == 0.5, "speed works without a pressure sensor")
+        precondition(PencilSound.pressure(force: .nan, maximumForce: 1) == 0.5 && PencilSound.pressure(force: 9, maximumForce: 1) == 1)
+        _ = PencilSound()
         print("AI off, cancellation, persistence, controls and pencil sound response ok")
         let count = controller.marks.notes.count
         controller.voice!.squeeze(.began)
@@ -209,8 +250,30 @@ nonisolated final class VoiceStub: URLProtocol, @unchecked Sendable {
             let input = object["input"] as! [[String: Any]], content = input[0]["content"] as! [[String: String]]
             precondition(content.filter { $0["type"] == "input_image" }.count == 2)
             let context = try! JSONSerialization.jsonObject(with: Data(content.last!["text"]!.utf8)) as! [String: Any]
-            precondition(context["gesture"] as? String == "voice" && context["speech"] as? String == "What is two plus two?")
-            json = #"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"reading\":\"What is two plus two?\",\"confidence\":\"high\",\"reply\":\"4\",\"passage\":false}"}]}]}"#
+            let tools = (object["tools"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
+            let answered = input.contains { $0["type"] as? String == "function_call_output" }
+            if let targets = context["targets"] as? [[String: Any]] {
+                precondition(context["speech"] as? String == "Move this one" && context["previous"] as? String == "Which picture?")
+                precondition(targets.count == 1 && targets[0]["overview"] as? [Int] == [10, 20, 30, 40])
+                let format = (object["text"] as! [String: Any])["format"] as! [String: Any]
+                let schema = format["schema"] as! [String: Any]
+                precondition(format["strict"] as? Bool == true && (schema["required"] as! [String]).contains("question"))
+                let properties = schema["properties"] as! [String: Any]
+                let items = (properties["edits"] as! [String: Any])["items"] as! [String: Any]
+                precondition((items["required"] as! [String]).contains("placement"), "placement participates in the strict output schema")
+                json = #"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"reading\":\"move the selected picture\",\"question\":\"Where should it go?\",\"edits\":[]}"}]}]}"#
+            } else if context["box"] != nil {
+                precondition(context["request"] as? String == "a triangle", "a spoken box carries what was asked")
+                json = #"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"reading\":\"a triangle\",\"kind\":\"ink\",\"say\":\"A triangle\",\"plot\":{\"expression\":\"\",\"xMin\":0,\"xMax\":1,\"yMin\":0,\"yMax\":1},\"parts\":[{\"name\":\"triangle\",\"strokes\":[[[20,180],[150,20],[280,180],[20,180]]],\"labels\":[]}]}"}]}]}"#
+            } else if context["speech"] as? String == "Draw a triangle" {
+                precondition(context["gesture"] as? String == "voice" && tools.contains("draw_box"), "voice can draw")
+                json = answered
+                    ? #"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"reading\":\"Draw a triangle\",\"confidence\":\"high\",\"reply\":\"\",\"passage\":false}"}]}]}"#
+                    : #"{"status":"completed","output":[{"type":"function_call","name":"draw_box","call_id":"box","arguments":"{\"request\":\"a triangle\",\"width\":300,\"height\":200}"}]}"#
+            } else {
+                precondition(context["gesture"] as? String == "voice" && context["speech"] as? String == "What is two plus two?")
+                json = #"{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"reading\":\"What is two plus two?\",\"confidence\":\"high\",\"reply\":\"4\",\"passage\":false}"}]}]}"#
+            }
         }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: rejected ? 401 : 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(json.utf8))

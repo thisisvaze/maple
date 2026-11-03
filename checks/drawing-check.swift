@@ -139,6 +139,10 @@ struct Check {
         precondition(colour(swing, 150, 200)[0] > 200 && colour(swing, 150, 200)[2] < 90 && colour(swing, 450, 200)[0] < 60, "coral below zero, blue above")
         _ = try Computed(field: "1/(x^2 + y^2)", xMin: -1, xMax: 1, yMin: -1, yMax: 1).raster(in: pictureBox)  // a singularity is clipped, not fatal
         do { _ = try Computed(field: "1", xMin: -1, xMax: 1, yMin: -1, yMax: 1).raster(in: pictureBox); preconditionFailure("a flat field has nothing to show") } catch {}
+        do {
+            _ = try Computed(field: "x * 1e308", xMin: -1, xMax: 1, yMin: -1, yMax: 1).raster(in: pictureBox)
+            preconditionFailure("an overflowing field range must be rejected")
+        } catch {}
         let turning = Computed(u: "-y", v: "x", xMin: -5, xMax: 5, yMin: -5, yMax: 5), square = CGSize(width: 300, height: 300)
         let rings = try turning.lines(in: square, font: .pen).filter { $0.count > 12 }
         precondition(rings.count > 3, "flow lines: \(rings.count)")

@@ -1,115 +1,151 @@
 import AVFoundation
+import Synchronization
 import UIKit
 
-/// Skuzic's continuous paper texture, shaped by screen speed and pressure. Touches still belong entirely to PencilKit.
+/// Pencil, rubber and felt on paper, made as they're drawn by PencilSynth on the audio thread: touches steer it with the
+/// speed in screen points (the same feel at every zoom and turn) and its pressure. Touches still belong entirely to
+/// PencilKit. It mixes with music, respects the silent switch, and lets go of the audio session a moment after the pen
+/// lifts.
 final class PencilSound: NSObject {
     var suspended = false { didSet { if suspended { stop() } } }
-    private var player: AVAudioPlayer?
-    private var displayLink: CADisplayLink?
+    private let engine = AVAudioEngine()
+    private let pen = Pen()
     private var previous: (point: CGPoint, time: TimeInterval)?
     private var speed = 0.0
-    private var lastMotion = 0.0
-    private var targetVolume: Float = 0
+    private var idle: Timer?
     private var audioActive = false
 
     override init() {
         super.init()
-        if let url = Bundle.main.url(forResource: "pencil", withExtension: "wav") {
-            do {
-                let player = try AVAudioPlayer(contentsOf: url)
-                player.numberOfLoops = -1
-                player.volume = 0
-                self.player = player
-            } catch { logger.error("pencil sound unavailable: \(error.localizedDescription, privacy: .public)") }
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+        let source = Self.source(pen, format: format)
+        engine.attach(source)
+        engine.connect(source, to: engine.mainMixerNode, format: format)
+        engine.prepare()  // so the first stroke doesn't wait on the audio hardware
+        for name in [AVAudioSession.interruptionNotification, AVAudioSession.routeChangeNotification, .AVAudioEngineConfigurationChange] {
+            NotificationCenter.default.addObserver(self, selector: #selector(audioChanged), name: name, object: nil)
         }
-        for name in [AVAudioSession.interruptionNotification, UIApplication.willResignActiveNotification] {
-            NotificationCenter.default.addObserver(self, selector: #selector(stop), name: name, object: nil)
-        }
-        NotificationCenter.default.addObserver(self, selector: #selector(routeChanged), name: AVAudioSession.routeChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(stop), name: UIApplication.willResignActiveNotification, object: nil)
     }
 
-    func touch(_ touch: UITouch, in view: UIView) {
+    func touch(_ touch: UITouch, in view: UIView, material: PencilSynth.Material) {
         guard !suspended else { return }
+        let pressure = Self.pressure(force: touch.force, maximumForce: touch.maximumPossibleForce)
         switch touch.phase {
         case .began:
             speed = 0
-            targetVolume = 0
             previous = (touch.location(in: view), touch.timestamp)
+            pen.begin(pressure: pressure, at: touch.timestamp, material: material)
+            start()
         case .moved:
             let point = touch.location(in: view), time = touch.timestamp
             guard let previous, time > previous.time else { return }
             let dt = time - previous.time
             let measured = hypot(point.x - previous.point.x, point.y - previous.point.y) / dt
-            speed += (measured - speed) * (1 - exp(-dt / 0.040)) // Skuzic's 40 ms motion smoothing
+            speed += (measured - speed) * (1 - exp(-dt / 0.040))  // Skuzic's 40 ms motion smoothing
             self.previous = (point, time)
-            targetVolume = Self.volume(speed: speed, force: touch.force, maximumForce: touch.maximumPossibleForce)
-            lastMotion = CACurrentMediaTime()
-            if targetVolume > 0 { play() }
+            pen.steer(speed: speed, pressure: pressure, at: time)
         case .ended, .cancelled:
             previous = nil
-            targetVolume = 0
+            pen.lift()
+            idle?.invalidate()
+            idle = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { if self?.previous == nil { self?.silence() } }
+            }
         default: break
         }
     }
 
-    // Calibration: quiet by default; screen points keep the feel the same at every canvas zoom and rotation.
-    nonisolated static func volume(speed: Double, force: Double, maximumForce: Double) -> Float {
-        guard speed.isFinite, speed > 3 else { return 0 }
-        let motion = sqrt(min(speed / 800, 1))
-        // Apple Pencil USB-C has no pressure sensor; speed still gives it a natural response.
-        let pressure = maximumForce > 0 && force.isFinite && maximumForce.isFinite ? min(max(force / maximumForce, 0), 1) : 0.5
-        return Float(0.16 * motion * (0.3 + 0.7 * sqrt(pressure)))
+    /// Apple Pencil USB-C has no pressure sensor; it gets the middle, and speed still gives it a natural response.
+    nonisolated static func pressure(force: Double, maximumForce: Double) -> Double {
+        maximumForce > 0 && force.isFinite && maximumForce.isFinite ? min(max(force / maximumForce, 0), 1) : 0.5
     }
 
-    private func play() {
-        guard displayLink == nil, let player else { return }
+    private func start() {
+        idle?.invalidate()
+        guard !engine.isRunning else { return }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.ambient, mode: .default) // mixes with music and respects the silent switch
+            try session.setCategory(.ambient, mode: .default)  // mixes with music and respects the silent switch
             try session.setActive(true)
             audioActive = true
-            player.volume = 0
-            guard player.play() else { stop(); return }
-            let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
-            link.add(to: .main, forMode: .common)
-            displayLink = link
+            try engine.start()
         } catch {
-            stop()
-            logger.error("pencil playback failed: \(error.localizedDescription, privacy: .public)")
+            silence()
+            logger.error("pencil sound failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    @objc private func tick(_ link: CADisplayLink) {
-        guard let player else { return }
-        let moving = CACurrentMediaTime() - lastMotion < 0.06
-        let target = moving ? targetVolume : 0
-        let tau = if previous == nil { 0.025 } else if moving { 0.015 } else { 0.06 }
-        let dt = link.targetTimestamp - link.timestamp
-        player.volume += (target - player.volume) * Float(1 - exp(-dt / tau))
-        // A pause inside one stroke changes gain only; never restart the sound under a continuous line.
-        if previous == nil, player.volume < 0.001 { silence() }
     }
 
     @objc func stop() {
         previous = nil
-        targetVolume = 0
+        pen.lift()
         silence()
     }
 
-    @objc private func routeChanged(_ notification: Notification) {
-        guard notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt != AVAudioSession.RouteChangeReason.categoryChange.rawValue else { return }
-        stop()
+    @objc nonisolated private func audioChanged(_ notification: Notification) {
+        if notification.name == AVAudioSession.routeChangeNotification,
+           notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt == AVAudioSession.RouteChangeReason.categoryChange.rawValue { return }
+        // Audio notifications arrive on the engine/session queue, including when Record changes the category.
+        Task { @MainActor [weak self] in self?.stop() }
     }
 
     private func silence() {
-        displayLink?.invalidate()
-        displayLink = nil
-        player?.volume = 0
-        player?.pause()
+        idle?.invalidate()
+        idle = nil
+        if engine.isRunning { engine.stop() }  // the next stroke starts it again
         if audioActive {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             audioActive = false
         }
     }
+
+    /// The audio thread's side: one synth, steered by `pen`. A pen that stops moving goes quiet 60 ms later, like a
+    /// real one, even though the Pencil stops sending samples while it rests.
+    nonisolated private static func source(_ pen: Pen, format: AVAudioFormat) -> AVAudioSourceNode {
+        let paper = PencilVoice(PencilSynth(rate: format.sampleRate))
+        return AVAudioSourceNode(format: format) { _, _, frames, list in
+            let buffers = UnsafeMutableAudioBufferListPointer(list)
+            guard let out = buffers.first?.mData?.assumingMemoryBound(to: Float.self) else { return noErr }
+            let stroke = pen.stroke.load(ordering: .acquiring)
+            if stroke != paper.stroke {
+                paper.stroke = stroke
+                let material = PencilSynth.Material(rawValue: pen.material.load(ordering: .relaxed)) ?? .pencil
+                paper.synth.begin(tap: false, material: material)  // a real Pencil already taps the glass
+            }
+            let moving = pen.touching.load(ordering: .relaxed)
+                && ProcessInfo.processInfo.systemUptime - Double(bitPattern: pen.moved.load(ordering: .relaxed)) < 0.06
+            let speed = moving ? Double(bitPattern: pen.speed.load(ordering: .relaxed)) : 0
+            paper.synth.render(into: out, count: Int(frames), speed: speed, pressure: Double(bitPattern: pen.pressure.load(ordering: .relaxed)))
+            return noErr
+        }
+    }
+}
+
+/// What the touch thread tells the audio thread, without locks: material, speed, pressure and motion time.
+nonisolated private final class Pen: Sendable {
+    let speed = Atomic<UInt64>(0), pressure = Atomic<UInt64>(0.5.bitPattern), moved = Atomic<UInt64>(0)
+    let touching = Atomic<Bool>(false), stroke = Atomic<Int>(0)
+    let material = Atomic<UInt64>(PencilSynth.Material.pencil.rawValue)
+
+    func begin(pressure: Double, at time: TimeInterval, material: PencilSynth.Material) {
+        self.material.store(material.rawValue, ordering: .relaxed)
+        steer(speed: 0, pressure: pressure, at: time)
+        touching.store(true, ordering: .relaxed)
+        stroke.add(1, ordering: .releasing)
+    }
+
+    func steer(speed: Double, pressure: Double, at time: TimeInterval) {
+        self.speed.store(speed.bitPattern, ordering: .relaxed)
+        self.pressure.store(pressure.bitPattern, ordering: .relaxed)
+        moved.store(time.bitPattern, ordering: .relaxed)  // UITouch time is system uptime, like the audio thread's clock
+    }
+
+    func lift() { touching.store(false, ordering: .relaxed) }
+}
+
+/// The synth, owned by the audio thread alone.
+nonisolated private final class PencilVoice: @unchecked Sendable {
+    var synth: PencilSynth
+    var stroke = 0
+    init(_ synth: PencilSynth) { self.synth = synth }
 }

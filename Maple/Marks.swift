@@ -48,6 +48,7 @@ final class Marks {
     var lastTrigger: [String] = []
     var asking = 0
     weak var lastTag: UILabel?
+    weak var statusAnchor: UIView?
     var work: [UUID: Task<Void, Never>] = [:]  // reading and answering in flight, cancelled when the page closes
     var closed = false
     var persist: (() -> Void)?
@@ -56,6 +57,12 @@ final class Marks {
     // Maple writes on the page only while the pen rests: a finished stroke can take a moment to reach the drawing, and
     // setting the drawing under a live stroke can cut it short.
     var penOn = false
+    var navigating = false {
+        didSet {
+            guard navigating != oldValue else { return }
+            if navigating { flushing?.cancel() } else { schedule() }
+        }
+    }
     var busy = false  // the pen is on the page, or its last stroke hasn't landed yet
     var lastInk = ContinuousClock.now
     var settling: Task<Void, Never>?
@@ -64,8 +71,9 @@ final class Marks {
     var erasing = false
     var fadedBy: [String: Set<String>] = [:]  // answers faded under the person's writing, and the strokes that faded them
     var editWait: Task<Void, Never>?  // the pen resting after the edit brush
+    var voiceActive = false { didSet { if voiceActive { editWait?.cancel() } } }
     var editing: Set<String> = []  // the marks, and the notes they change, of edits in flight
-    var retrying: [(dot: Bubble, marks: Set<String>)] = []  // failed edits' orange dots, and the marks each tries again
+    var retrying: [(dot: Bubble, marks: Set<String>, previous: String?)] = []
 
     /// One step of Maple's own changes, made by stroke and note id, so undoing it never reverts anything else on the page.
     struct Change {
@@ -131,6 +139,7 @@ final class Marks {
         }
         guard writing, active else { return }
         if editing {
+            guard !voiceActive else { return }
             editWait = Task {
                 try? await Task.sleep(for: Self.editPause)
                 if !Task.isCancelled { edit() }
@@ -166,6 +175,7 @@ final class Marks {
 
     /// Writes everything queued, cancels what's in flight, and stops writing to the page, which is closing.
     func stop() {
+        navigating = false
         flush()
         closed = true
         [waiting, settling, flushing, editWait].forEach { $0?.cancel() }
@@ -181,7 +191,7 @@ final class Marks {
         work.values.forEach { $0.cancel() }
         pending.removeAll()
         editing.removeAll()
-        retrying.removeAll()
+        retire { _ in true }
         for bubble in bubbles where bubble.note == nil { remove(bubble) }
         grids.forEach { $0.view.removeFromSuperview() }
         grids.removeAll()
@@ -207,7 +217,7 @@ final class Marks {
 
     func schedule() {
         flushing?.cancel()
-        guard let first = pending.first, !busy, active else { return }
+        guard let first = pending.first, !busy, !navigating, active else { return }
         let due = min(lastInk + Self.rest, first.since + Self.restCap)
         flushing = Task {
             try? await Task.sleep(until: due)
@@ -221,7 +231,7 @@ final class Marks {
     /// Writes the queued changes now.
     func flush() {
         flushing?.cancel()
-        guard enabled else { return }
+        guard enabled, !navigating else { return }
         let queued = pending
         pending = []
         for item in queued {
@@ -236,12 +246,12 @@ final class Marks {
     func apply(_ change: Change) {
         let before = History.State(drawing: canvas.drawing, notes: notes)
         var drawing = canvas.drawing, removed: [PKStroke] = []
-        var adding = Dictionary(change.add.map { (Self.id($0), $0) }) { first, _ in first }
-        drawing.strokes = drawing.strokes.compactMap { stroke in
+        var adding = Dictionary(grouping: change.add, by: Self.id)
+        drawing.strokes = drawing.strokes.flatMap { stroke in
             let id = Self.id(stroke)
-            guard change.remove.contains(id) else { return stroke }
+            guard change.remove.contains(id) else { return [stroke] }
             removed.append(stroke)
-            return adding.removeValue(forKey: id)
+            return adding.removeValue(forKey: id) ?? []
         }
         drawing.strokes += change.add.filter { adding[Self.id($0)] != nil }
         let dropped = notes.filter { change.dropping.contains($0.id) }
@@ -307,7 +317,7 @@ final class Marks {
         guard let agent, asking < Self.maxAsking, active else { return }
         let drawing = canvas.drawing, zoom = canvas.zoomScale, memory = memories.memory.lines
         let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
-        let recent = drawing.strokes.filter(AgentPen.person).suffix(12).compactMap { stroke -> Grouping.Stroke? in
+        let recent = Array(drawing.strokes.reversed().lazy.filter(AgentPen.person).prefix(12)).reversed().compactMap { stroke -> Grouping.Stroke? in
             let bounds = Self.bounds(stroke, turn: turn, zoom: zoom)
             let started = stroke.path.creationDate.timeIntervalSince1970
             return bounds.isNull ? nil : Grouping.Stroke(id: Self.id(stroke), bounds: bounds, started: started,
@@ -319,21 +329,11 @@ final class Marks {
         lastTrigger = trigger
 
         let selected = Set(trigger)
-        var marked = drawing
-        marked.strokes = drawing.strokes.filter { !AgentPen.edit($0) }.map { stroke in  // edit marks are for edits, never a mark's context
-            var stroke = stroke
-            if selected.contains(Self.id(stroke)) { stroke.ink = PKInk(stroke.ink.inkType, color: .systemRed) }
-            return stroke
-        }
         // In the reading frame: the mark, a close-up around it, and the screen with the close-up.
         let mark = recent.filter { selected.contains($0.id) }.reduce(CGRect.null) { $0.union($1.bounds) }
         if let line = struckLine(mark, by: trigger, turn: turn) { return scratch(line, trigger) }  // no need to ask anyone
         let asked = question(answeredBy: mark, turn: turn, zoom: zoom)  // the box and the question go in the close-up with the reply
-        let focus = asked.map { mark.union(Self.reach($0, turn: turn)) } ?? mark
-        let side = max(focus.width, focus.height) + 2 * Self.nearPad
-        let near = CGRect(x: focus.midX - side / 2, y: focus.midY - side / 2, width: side, height: side)
-        let around = screen.reduce(near) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
-        let threads = notes.filter { around.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
+        let (marked, near, around, threads) = sight(selected, focus: asked.map { mark.union(Self.reach($0, turn: turn)) } ?? mark, turn: turn)
         let middle = CGPoint(x: mark.midX, y: mark.midY).applying(reading.inverted()), reach = max(mark.width, mark.height) / 2 + 60 / zoom
         let target = notes.filter { Self.distance(middle, $0) <= reach }.min { Self.distance(middle, $0) < Self.distance(middle, $1) }?.id
         let anchor = Self.anchor(mark, zoom).applying(reading.inverted()), view = (screen: screen, avoid: [pagesCorner])
@@ -341,7 +341,7 @@ final class Marks {
         // an empty box goes on to Muse.
         let thinking = dots == nil ? nil : add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
         run { [self] in
-            let (nearPNG, aroundPNG) = await Self.crops(marked.transformed(using: reading), near, around)
+            let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
             guard !Task.isCancelled else { return }
             var gesture = "double_dot", sure = true
             if dots == nil {
@@ -383,26 +383,54 @@ final class Marks {
         }
     }
 
-    /// Jev's verdict in the top-right corner for 3 s, for tuning: what it saw and how sure, "maybe" when that fell short.
-    func tag(_ verdict: Jev.Verdict) {
-        flash((verdict.mark == verdict.top ? "" : "maybe ") + verdict.top.replacingOccurrences(of: "_", with: " ") + " \(Int((verdict.probability * 100).rounded()))%")
+    /// What Muse sees of a mark, in the page turned by `turn`: the page without edit marks and with `selected` in red, a
+    /// square close-up around `focus`, the screen with the close-up, and the answers there.
+    func sight(_ selected: Set<String>, focus: CGRect, turn: CGFloat) -> (drawing: PKDrawing, near: CGRect, around: CGRect, threads: [Agent.Thread]) {
+        let reading = CGAffineTransform(rotationAngle: turn)
+        var marked = canvas.drawing
+        marked.strokes = marked.strokes.filter { !AgentPen.edit($0) }.map { stroke in  // edit marks are for edits, never a mark's context
+            var stroke = stroke
+            if selected.contains(Self.id(stroke)) { stroke.ink = PKInk(stroke.ink.inkType, color: .systemRed) }
+            return stroke
+        }
+        let side = max(focus.width, focus.height) + 2 * Self.nearPad
+        let near = CGRect(x: focus.midX - side / 2, y: focus.midY - side / 2, width: side, height: side)
+        let around = screen.reduce(near) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
+        let threads = notes.filter { around.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
+        return (marked.transformed(using: reading), near, around, threads)
     }
 
-    /// A word in the top-right corner for 3 s.
+    /// Brief recognition feedback in the same surface as the other small confirmations.
+    func tag(_ verdict: Jev.Verdict) {
+        guard verdict.mark == verdict.top else { return }
+        flash(verdict.top.replacingOccurrences(of: "_", with: " ").capitalized + " recognized")
+    }
+
+    /// Brief feedback beside the AI controls for 3 s.
     func flash(_ text: String) {
         guard let screen = screenView else { return }
         lastTag?.removeFromSuperview()
-        let label = UILabel()
+        let label = StatusLabel()
         label.text = text
-        label.font = .preferredFont(forTextStyle: .caption1)
-        label.textColor = .secondaryLabel
-        label.sizeToFit()
-        let safe = screen.safeAreaLayoutGuide.layoutFrame
-        label.frame.origin = CGPoint(x: safe.maxX - label.bounds.width - 16, y: safe.minY + 12)
-        label.autoresizingMask = [.flexibleLeftMargin, .flexibleBottomMargin]
+        label.translatesAutoresizingMaskIntoConstraints = false
         screen.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: screen.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+        ])
+        if let anchor = statusAnchor {
+            NSLayoutConstraint.activate([
+                label.trailingAnchor.constraint(equalTo: anchor.leadingAnchor, constant: -10),
+                label.centerYAnchor.constraint(equalTo: anchor.centerYAnchor),
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                label.trailingAnchor.constraint(equalTo: screen.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+                label.topAnchor.constraint(equalTo: screen.safeAreaLayoutGuide.topAnchor, constant: 16),
+            ])
+        }
         lastTag = label
-        UIView.animate(withDuration: 0.6, delay: 3) { label.alpha = 0 } completion: { _ in label.removeFromSuperview() }
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.28, delay: 3) { label.alpha = 0 } completion: { _ in label.removeFromSuperview() }
     }
 
     /// Where a mark's dot sits, in the mark's frame: just right of its top-right corner.
@@ -446,9 +474,19 @@ final class Marks {
     }
 
     /// Answers a spoken question about the visible page, using the same crops and saved threads as pen questions.
-    func askVoice(_ transcript: String) async throws {
+    func askVoice(_ transcript: String, editMarks: Set<String> = [], selection: [Note]? = nil) async throws {
         guard active, let agent, let view = screenView else { throw CancellationError() }
         try Task.checkCancellation()
+        if !editMarks.isEmpty {
+            guard present(Array(editMarks)), let batch = batch(editMarks, together: true) else { throw Muse.Failure("The selection changed. Circle it again and repeat the instruction.") }
+            if let selection, selection.count != batch.targets.count || !selection.allSatisfy(batch.targets.contains) {
+                throw Muse.Failure("The selection changed while recording. Circle it again and repeat the instruction.")
+            }
+            editing.formUnion(batch.ids)
+            await edit(batch, speech: transcript)
+            try Task.checkCancellation()
+            return
+        }
         let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
         let area = screen.reduce(CGRect.null) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
         guard !area.isEmpty else { throw Muse.Failure("Open a page before asking a question.") }
@@ -460,41 +498,92 @@ final class Marks {
         try Task.checkCancellation()
         guard active else { throw CancellationError() }
         learn(answer, evidence: transcript)
-        guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Muse.Failure("The answer was empty. Please try again.") }
+        guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !answer.boxes.isEmpty else { throw Muse.Failure("The answer was empty. Please try again.") }
         let safe = view.safeAreaLayoutGuide.layoutFrame
         let anchor = onPage(CGRect(x: safe.minX + 24, y: safe.minY + 96, width: 0, height: 0))[0]
+        var taken: [[CGPoint]] = []  // boxes drawn so far, which the next box and the reply keep clear of
+        for asked in answer.boxes.prefix(Self.maxBoxes) {
+            guard let box = frame(asked, near: anchor, avoid: taken) else { flash("No clear space on screen to draw in"); break }
+            taken.append(box)
+        }
+        guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         var note = Note(mark: "voice", trigger: [], anchor: anchor, zoom: canvas.zoomScale, reading: transcript, reply: answer.reply, turn: self.turn)
-        let bubble = voiceBubble(for: note)
+        let bubble = voiceBubble(for: note, avoid: taken)
         note.anchor = bubble.anchor
         note.turn = bubble.turn
         show(note, bubble: add(bubble))
     }
 
-    /// Finds room for the measured reply near the last visible writing, without another model request.
-    func voiceBubble(for note: Note) -> Bubble {
+    /// Finds room for the measured reply near the last visible writing, clear of `avoid`, without another model request.
+    func voiceBubble(for note: Note, avoid: [[CGPoint]] = []) -> Bubble {
         let bubble = Bubble(anchor: note.anchor, zoom: note.zoom, turn: note.turn ?? 0, note: note)
         bubble.open = true
         bubble.update()
-        let screen = screen, frame = CGAffineTransform(rotationAngle: note.turn ?? 0)
+        let size = CGSize(width: bubble.bounds.width / note.zoom, height: bubble.bounds.height / note.zoom)
+        if let place = room(for: size, near: note.anchor, turn: note.turn ?? 0, zoom: note.zoom, avoid: avoid) {
+            bubble.anchor = place.rect.origin.applying(CGAffineTransform(rotationAngle: -place.turn))
+            bubble.turn = place.turn
+        }
+        // shortcut: a full page keeps the visible corner fallback; add a movable reply tray if crowded pages need it.
+        return bubble
+    }
+
+    /// Room on screen for a block of `size` page points near the latest writing, or `fallback` on a blank screen, clear of
+    /// ink, dots and `avoid`: its rect in the reading frame Room squared it to, and that frame's turn.
+    func room(for size: CGSize, near fallback: CGPoint, turn: CGFloat, zoom: CGFloat, avoid: [[CGPoint]] = []) -> (rect: CGRect, turn: CGFloat)? {
+        let screen = screen, frame = CGAffineTransform(rotationAngle: turn)
         let area = Room.box(screen, frame)
-        let recent = canvas.drawing.strokes.last { AgentPen.person($0) && Room.box(Self.points($0, every: 4 / note.zoom).flatMap { $0 }, frame).intersects(area) }
-        var ink = ink(around: screen, marking: Set(recent.map { [Self.id($0)] } ?? []), zoom: note.zoom)
-        if recent == nil { ink.append(Room.Stroke(points: [note.anchor], person: false, mark: true)) }
+        let recent = canvas.drawing.strokes.last { AgentPen.person($0) && Room.box(Self.points($0, every: 4 / zoom).flatMap { $0 }, frame).intersects(area) }
+        var ink = ink(around: screen, marking: Set(recent.map { [Self.id($0)] } ?? []), zoom: zoom)
+        if recent == nil { ink.append(Room.Stroke(points: [fallback], person: false, mark: true)) }
         let dots = bubbles.map { dot in
             let r = dot.frame
             return [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
                 .map { CGPoint(x: $0.x / canvas.zoomScale, y: $0.y / canvas.zoomScale) }
         }
-        let request = Room.Request(strokes: ink, doubleDot: false, screen: screen, avoid: [pagesCorner] + dots,
-                                   screenAngle: note.turn ?? 0, zoom: note.zoom, nib: nil)
-        if let place = Room.place(request, layout: { _, _ in
-            (CGRect(x: 0, y: 0, width: bubble.bounds.width / note.zoom, height: bubble.bounds.height / note.zoom), 1)
-        }) {
-            bubble.anchor = place.origin.applying(CGAffineTransform(rotationAngle: -place.angle))
-            bubble.turn = place.angle
+        let request = Room.Request(strokes: ink, doubleDot: false, screen: screen, avoid: [pagesCorner] + dots + avoid, screenAngle: turn, zoom: zoom, nib: nil)
+        return Room.place(request) { _, _ in (CGRect(origin: .zero, size: size), 1) }.map { ($0.rect, $0.angle) }
+    }
+
+    static let maxBoxes = 3  // boxes one spoken request may draw
+    static let boxScales: [CGFloat] = [1, 0.75, 0.55]  // calibration knob: the asked box, then smaller, until one finds room
+
+    /// Draws a box Muse asked for out loud in Maple's pen, where Room finds room near the latest writing, and once it's on
+    /// the page fills it like a box the person drew, told what they asked for. Its corners in page points; nil if no size fits.
+    func frame(_ asked: Agent.Box, near fallback: CGPoint, avoid: [[CGPoint]]) -> [CGPoint]? {
+        guard let agent, let view = screenView else { return nil }
+        let zoom = canvas.zoomScale, turn = self.turn, safe = view.safeAreaLayoutGuide.layoutFrame, memory = memories.memory.lines
+        let width = min(max(asked.width, 120), safe.width * 0.9) / zoom, height = min(max(asked.height, 90), safe.height * 0.8) / zoom
+        guard let (box, angle) = Self.boxScales.lazy.compactMap({
+            self.room(for: CGSize(width: width * $0, height: height * $0), near: fallback, turn: turn, zoom: zoom, avoid: avoid)
+        }).first else { return nil }
+        let stroke = Self.frame(box, turn: angle, zoom: zoom), id = Self.id(stroke)
+        enqueue {
+            Change(add: [stroke]) { [weak self] in
+                guard let self else { return }
+                let (marked, near, around, threads) = sight([id], focus: box, turn: angle)
+                run { [self] in
+                    let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
+                    guard !Task.isCancelled else { return }
+                    await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: [id], box: box, turn: angle, zoom: zoom, request: asked.request, memory: memory)
+                }
+            }
         }
-        // shortcut: a full page keeps the visible corner fallback; add a movable reply tray if crowded pages need it.
-        return bubble
+        let page = CGAffineTransform(rotationAngle: -angle)
+        return [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY), CGPoint(x: box.maxX, y: box.maxY),
+                CGPoint(x: box.minX, y: box.maxY)].map { $0.applying(page) }
+    }
+
+    /// A box's frame in Maple's pen, `box` in the page turned by `turn`: one stroke round it, closing a little past where
+    /// it began, with each corner a little off true, as a hand draws it.
+    static func frame(_ box: CGRect, turn: CGFloat, zoom: CGFloat) -> PKStroke {
+        let wobble = 1.5 / zoom  // calibration knob: screen points a corner may sit off true
+        func off(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x + .random(in: -wobble ... wobble), y: p.y + .random(in: -wobble ... wobble)) }
+        let corners = [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY), CGPoint(x: box.maxX, y: box.maxY),
+                       CGPoint(x: box.minX, y: box.maxY)].map(off)
+        let page = CGAffineTransform(rotationAngle: -turn)
+        return AgentPen.stroke((corners + [corners[0], CGPoint(x: corners[0].x + 8 / zoom, y: corners[0].y)]).map { $0.applying(page) },
+                               width: AgentPen.width(at: zoom), step: 2 / zoom)
     }
 
     /// Takes what the Answer agent asks to remember or forget through Memory's check, against the person's words at this
@@ -645,6 +734,11 @@ final class Marks {
         canvas.drawing.strokes.filter { AgentPen.wrote($0) && $0.path.creationDate == note.inked }
     }
 
+    /// A spoken drawing's frame belongs to Maple too; a box drawn by the person stays where they put it.
+    func frames(of note: Note) -> [PKStroke] {
+        canvas.drawing.strokes.filter { AgentPen.wrote($0) && note.trigger.contains(Self.id($0)) }
+    }
+
     /// The answer or drawing the strokes `ids` come within a few screen points of, by the ink itself, not its box.
     func answer(touching ids: [String]) -> Note? {
         let marked = canvas.drawing.strokes.filter { ids.contains(Self.id($0)) }
@@ -715,7 +809,7 @@ final class Marks {
         }
         let painted = notes.filter { $0.picture != nil }
         pictures.removeAll { view in
-            guard !painted.contains(where: { $0.id == view.note.id && $0.picture == view.note.picture }) else { return false }
+            guard !painted.contains(where: { $0 == view.note }) else { return false }
             view.removeFromSuperview()
             return true
         }
@@ -726,7 +820,7 @@ final class Marks {
             pictures.append(view)
         }
         let quiet = notes.filter { $0.mark != "frame" && $0.inked == nil }
-        bubbles.filter { dot in dot.note.map { note in !quiet.contains { $0.id == note.id } } ?? false }.forEach(remove)
+        bubbles.filter { dot in !retrying.contains { $0.dot === dot } && (dot.note.map { note in !quiet.contains { $0.id == note.id } } ?? false) }.forEach(remove)
         for note in quiet where !bubbles.contains(where: { $0.note?.id == note.id }) {
             add(Bubble(anchor: note.anchor, zoom: note.zoom, turn: note.turn ?? 0, note: note))
         }
@@ -736,9 +830,10 @@ final class Marks {
     /// Fills an empty box, drawn level in the page turned by `turn`: with the agent's ink, a graph or figure the app works
     /// out, a picture computed from equations or painted by Muse Image, or if it could mean two things, a question written
     /// beside it. A pixel grid shimmers in the box until it lands; if drawing fails, an orange dot at its corner tries
-    /// again. `asked` is that question, when the strokes `reply` answer it: both go as the box fills.
+    /// again. `asked` is that question, when the strokes `reply` answer it: both go as the box fills. `request` is what the
+    /// person asked for out loud, when Maple drew the box.
     func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, turn: CGFloat, zoom: CGFloat,
-              asked: Note? = nil, reply: [String] = [], memory: [Memory.Line] = []) async {
+              asked: Note? = nil, reply: [String] = [], request: String? = nil, memory: [Memory.Line] = []) async {
         guard active, present(trigger) else { return }
         let done = shimmer(over: box, turn: turn)
         asking += 1
@@ -746,7 +841,7 @@ final class Marks {
         let start = ContinuousClock.now
         let anchor = Self.anchor(box, zoom).applying(CGAffineTransform(rotationAngle: -turn))
         do {
-            let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, memory: memory)
+            let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, request: request, memory: memory)
             guard active else { return }
             guard present(trigger) else { return done() }
             if drawing.kind == "ask" {
@@ -771,7 +866,7 @@ final class Marks {
                               dropping: Set([question?.id].compactMap { $0 })) { [weak self] in
                     guard let view = self?.pictures.first(where: { $0.note.id == id }), !UIAccessibility.isReduceMotionEnabled else { return }
                     view.alpha = 0
-                    UIView.animate(withDuration: 0.4) { view.alpha = 1 }
+                    MapleStyle.animate(0.5) { view.alpha = 1 }
                 }
             }
         } catch {
@@ -781,7 +876,7 @@ final class Marks {
             let failed = add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
             failed.retry = { [weak self, weak failed] in
                 self?.remove(failed)
-                self?.run { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, turn: turn, zoom: zoom, asked: asked, reply: reply, memory: memory) }
+                self?.run { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, turn: turn, zoom: zoom, asked: asked, reply: reply, request: request, memory: memory) }
             }
         }
     }
@@ -901,18 +996,22 @@ final class Marks {
     }
 
     /// Edits with every edit mark on the page that no edit has yet, as one batch.
-    func edit() { edit(Set(canvas.drawing.strokes.filter(AgentPen.edit).map(Self.id))) }
+    func edit() {
+        guard !voiceActive else { return }
+        edit(Set(canvas.drawing.strokes.filter(AgentPen.edit).map(Self.id)))
+    }
 
     /// Changes Maple's drawings and answers that the edit marks `ids` point at. A pixel grid shimmers over each while
     /// Muse reads the marks, and the changes land at rest as one step of undo. Marks that point at nothing of Maple's
     /// just fade, and marks on what's already being edited wait for the next edit; if Muse fails or changes nothing,
     /// they stay, and an orange dot by them tries again.
     func edit(_ ids: Set<String>) {
-        guard active, let batch = batch(ids) else { return }
+        guard active, !voiceActive, let batch = batch(ids) else { return }
         let marks = Set(batch.marks.map(Self.id))
-        retire { !$0.isDisjoint(with: marks) }  // this edit takes their marks
+        let previous = retrying.last { !$0.marks.isDisjoint(with: marks) }?.previous
+        retire { !$0.isDisjoint(with: marks) }
         editing.formUnion(batch.ids)
-        guard !batch.targets.isEmpty else {
+        if batch.targets.isEmpty {
             return enqueue { [weak self] in
                 guard let self else { return nil }
                 editing.subtract(marks)
@@ -920,40 +1019,70 @@ final class Marks {
                 return Change(remove: marks, undoable: false) { [weak self] in self?.fadeOut(left) }
             }
         }
-        guard let agent else { return editing.subtract(batch.ids) }
+        run { [self] in await edit(batch, speech: nil, previous: previous) }
+    }
+
+    /// Shared by written edits and speech; the caller reserves the batch before starting async work.
+    func edit(_ batch: Batch, speech: String?, previous prior: String? = nil) async {
+        let marks = Set(batch.marks.map(Self.id))
+        let previous = prior ?? retrying.last { !$0.marks.isDisjoint(with: marks) }?.previous
+        retire { !$0.isDisjoint(with: marks) }
         let grids = batch.targets.map { shimmer(over: $0.rect ?? .zero, turn: $0.turn ?? 0) }
         let done = { grids.forEach { $0() } }
-        run { [self] in
+        var queued = false
+        defer { if !queued { done(); editing.subtract(batch.ids) } }
+        let dialogue = [previous, speech].compactMap { $0 }.joined(separator: "\n")
+        guard !batch.targets.isEmpty, batch.targets.count <= Self.maxTargets else {
+            failed(batch, done: done, speech: dialogue, question: "Circle one to four Maple drawings or pictures, then tell me what to change.")
+            return
+        }
+        guard let agent else { return }
+        do {
             let (near, around, targets) = await request(batch)
             guard active else { return }
             asking += 1
             defer { asking -= 1 }
             let start = ContinuousClock.now
-            do {
-                let result = try await agent.edit(near: near, around: around, targets: targets, memory: memories.memory.lines)
-                logger.notice("edited targets=\(targets.count) edits=\(result.edits.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
-                let pictures = try await repainted(result, batch)
-                guard active else { return }
-                try land(result, batch, pictures: pictures, done: done)
-            } catch {
-                logger.error("edit failed: \(error.localizedDescription, privacy: .public)")
-                failed(batch, done: done)
+            let result = try await agent.edit(near: near, around: around, targets: targets, speech: speech, previous: previous, memory: memories.memory.lines)
+            guard active else { return }
+            logger.notice("edited targets=\(targets.count) edits=\(result.edits.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
+            if let question = result.question?.trimmingCharacters(in: .whitespacesAndNewlines), !question.isEmpty {
+                failed(batch, done: done, speech: dialogue, question: question)
+                return
             }
+            let pictures = try await repainted(result, batch)
+            guard active else { return }
+            try land(result, batch, pictures: pictures, speech: dialogue, done: done)
+            queued = true
+        } catch {
+            guard active else { return }
+            logger.error("edit failed: \(error.localizedDescription, privacy: .public)")
+            failed(batch, done: done, speech: dialogue, question: (error as? PlacementFailure)?.message)
         }
     }
 
     /// An edit Muse couldn't make: the grids go, and the marks stay, free for the next edit, with an orange dot by them
     /// that tries the same batch again, until an edit takes them or they're erased.
-    func failed(_ batch: Batch, done: () -> Void) {
+    func failed(_ batch: Batch, done: () -> Void, speech: String? = nil, question: String? = nil) {
         done()
         guard active else { return }
         editing.subtract(batch.ids)
         let marks = Set(batch.marks.map(Self.id))
         guard canvas.drawing.strokes.contains(where: { marks.contains(Self.id($0)) }) else { return }
         let box = batch.marks.reduce(CGRect.null) { $0.union(Self.bounds($1, turn: batch.turn, zoom: batch.zoom)) }
-        let dot = add(Bubble(anchor: Self.anchor(box, batch.zoom).applying(CGAffineTransform(rotationAngle: -batch.turn)), zoom: batch.zoom, turn: batch.turn))
-        dot.retry = { [weak self] in self?.edit(marks) }  // which takes the dot away
-        retrying.append((dot, marks))
+        let anchor = Self.anchor(box, batch.zoom).applying(CGAffineTransform(rotationAngle: -batch.turn))
+        let dot: Bubble
+        if let question {
+            let safe = screenView?.safeAreaLayoutGuide.layoutFrame ?? .zero
+            let fallback = onPage(CGRect(x: safe.minX + 24, y: safe.minY + 96, width: 0, height: 0))[0]
+            let note = Note(mark: "voice", trigger: [], anchor: fallback, zoom: canvas.zoomScale, reading: speech ?? "", reply: question, turn: turn)
+            dot = add(voiceBubble(for: note))
+            UIAccessibility.post(notification: .announcement, argument: question)
+        } else {
+            dot = add(Bubble(anchor: anchor, zoom: batch.zoom, turn: batch.turn))
+            dot.retry = { [weak self] in self?.edit(marks) }
+        }
+        retrying.append((dot, marks, [speech, question].compactMap { $0 }.joined(separator: "\n")))
     }
 
     /// Takes away the failed edits' dots whose marks `gone` says are gone.
@@ -967,9 +1096,9 @@ final class Marks {
 
     /// The edit marks among `ids` still on the page and in no edit yet, and the drawings and answers of Maple's they
     /// point at: those whose ink a mark comes within editReach of, a drawing whose box a mark lies in, and those inside
-    /// a loop drawn round them. At most maxTargets, nearest the marks first. Nil without marks, or when all they point
+    /// a loop drawn round them, nearest the marks first. Nil without marks, or when all they point
     /// at is being edited: they wait for the next edit then.
-    func batch(_ ids: Set<String>) -> Batch? {
+    func batch(_ ids: Set<String>, together: Bool = false) -> Batch? {
         let zoom = canvas.zoomScale, turn = self.turn, reach = Self.editReach / zoom
         let marks = canvas.drawing.strokes.filter { ids.contains(Self.id($0)) && !editing.contains(Self.id($0)) }
         guard !marks.isEmpty else { return nil }
@@ -990,8 +1119,8 @@ final class Marks {
             return (note, points.map { Self.distance($0, note) }.min() ?? 0)
         }
         let targets = pointed.filter { !editing.contains($0.note.id) }
-        guard pointed.isEmpty || !targets.isEmpty else { return nil }
-        return Batch(marks: marks, targets: targets.sorted { $0.gap < $1.gap }.prefix(Self.maxTargets).map(\.note), screen: screen,
+        guard pointed.isEmpty || !targets.isEmpty, !together || targets.count == pointed.count else { return nil }
+        return Batch(marks: marks, targets: targets.sorted { $0.gap < $1.gap }.map(\.note), screen: screen,
                      avoid: [pagesCorner], turn: turn, zoom: zoom)
     }
 
@@ -1021,26 +1150,58 @@ final class Marks {
             return red
         }
         let boxes = batch.targets.map { Self.box($0, turn: batch.turn) }
-        let area = (boxes + batch.marks.map { Self.bounds($0, turn: batch.turn, zoom: batch.zoom) }).reduce(CGRect.null) { $0.union($1) }
-        let side = max(area.width, area.height) + 2 * Self.nearPad
-        let near = CGRect(x: area.midX - side / 2, y: area.midY - side / 2, width: side, height: side)
-        let around = batch.screen.reduce(near) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
+        let (near, around) = Self.editArea(batch)
         func numbers(_ r: CGRect, _ scale: CGFloat = 1) -> [Double] { [r.minX, r.minY, r.width, r.height].map { Double(($0 * scale).rounded()) } }
         let targets = zip(batch.targets, boxes).enumerated().map { i, target in
             let (note, box) = target, at = numbers(box.offsetBy(dx: -near.minX, dy: -near.minY), Self.scale(near))
+            let overview = numbers(box.offsetBy(dx: -around.minX, dy: -around.minY), Self.scale(around))
             guard note.mark == "frame", let source = note.source, let rect = note.rect else {
-                return Agent.Target(id: "\(i + 1)", kind: "answer", at: at, question: note.reading, answer: note.reply)
+                return Agent.Target(id: "\(i + 1)", kind: "answer", at: at, overview: overview, question: note.reading, answer: note.reply)
             }
             // The marks in the drawing's own box points, though the page may have been turned otherwise when it was drawn.
             let own = CGAffineTransform(rotationAngle: note.turn ?? 0).concatenating(CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
             let marks = batch.marks.map { Room.box(Self.points($0, every: 2 / batch.zoom).flatMap { $0 }, own) }.filter { !$0.isNull }
-            return Agent.Target(id: "\(i + 1)", kind: source.kind == "picture" ? "picture" : "drawing", at: at, box: [Double(rect.width.rounded()), Double(rect.height.rounded())],
+            return Agent.Target(id: "\(i + 1)", kind: source.kind == "picture" ? "picture" : "drawing", at: at, overview: overview, box: [Double(rect.width.rounded()), Double(rect.height.rounded())],
                                 shows: [note.reading, note.reply].filter { !$0.isEmpty }.joined(separator: " — "),
                                 drawing: .init(kind: source.kind, parts: source.parts, plot: source.plot, figure: source.figure, computed: source.computed, prompt: source.picture.prompt),
                                 marks: marks.map { numbers($0) })
         }
-        let (nearPNG, aroundPNG) = await Self.crops(marked.transformed(using: reading), near, around)
-        return (nearPNG, aroundPNG, targets)
+        // Pictures live below PencilKit, so include them under the marked ink in both model images.
+        let painted = notes.compactMap { note -> (Note, UIImage)? in
+            guard let file = note.picture, let image = UIImage(contentsOfFile: page.pictures.appending(path: file).path) else { return nil }
+            return (note, image)
+        }
+        func png(_ crop: CGRect) -> Data {
+            let scale = Self.scale(crop), size = CGSize(width: (crop.width * scale).rounded(), height: (crop.height * scale).rounded())
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            return UIGraphicsImageRenderer(size: size, format: format).pngData { context in
+                UIColor.white.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                for (note, image) in painted {
+                    guard let rect = note.rect, Self.box(note, turn: batch.turn).intersects(crop) else { continue }
+                    let c = context.cgContext
+                    c.saveGState()
+                    c.scaleBy(x: scale, y: scale)
+                    c.translateBy(x: -crop.minX, y: -crop.minY)
+                    c.rotate(by: batch.turn - (note.turn ?? 0))
+                    image.draw(in: rect)
+                    c.restoreGState()
+                }
+                UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+                    marked.transformed(using: reading).image(from: crop, scale: scale).draw(in: CGRect(origin: .zero, size: size))
+                }
+            }
+        }
+        return (png(near), png(around), targets)
+    }
+
+    static func editArea(_ batch: Batch) -> (near: CGRect, around: CGRect) {
+        let boxes = batch.targets.map { box($0, turn: batch.turn) }
+        let area = (boxes + batch.marks.map { bounds($0, turn: batch.turn, zoom: batch.zoom) }).reduce(CGRect.null) { $0.union($1) }
+        let side = max(area.width, area.height) + 2 * nearPad
+        let near = CGRect(x: area.midX - side / 2, y: area.midY - side / 2, width: side, height: side)
+        return (near, batch.screen.reduce(near) { $0.union(CGRect(origin: $1.applying(CGAffineTransform(rotationAngle: batch.turn)), size: .zero)) })
     }
 
     /// A note's written block or box in the page turned by `turn`.
@@ -1060,14 +1221,22 @@ final class Marks {
     /// and the batch's marks faded off the page. If the marks were erased meanwhile, the person took the instruction
     /// back and nothing changes. Throws, before anything is queued, for a result that can't be used or changes nothing.
     /// `pictures` are the new pictures, from repainted(). `done` runs as it lands.
-    func land(_ result: Agent.Edits, _ batch: Batch, pictures: [String: String] = [:], done: @escaping () -> Void = {}) throws {
-        let (sources, replies) = try patches(result, batch)
+    func land(_ result: Agent.Edits, _ batch: Batch, pictures: [String: String] = [:], speech: String? = nil, done: @escaping () -> Void = {}) throws {
+        let (sources, replies, placements) = try patches(result, batch)
         // A drawing's new version is known now: its box is its own. nil when nothing's left of it, so it goes.
         var redrawn: [String: (note: Note?, ink: [PKStroke])] = [:]
         for (n, target) in batch.targets.enumerated() {
-            guard let drawing = sources[target.id], let box = target.rect else { continue }
+            guard var drawing = sources[target.id], let oldBox = target.rect else { continue }
+            let box = placements[target.id] ?? oldBox
+            drawing = drawing.scaled(by: box.width / oldBox.width)
             guard !drawing.blank else { redrawn[target.id] = (nil, []); continue }
             var note = target
+            if placements[target.id] != nil {
+                let own = note.anchor.applying(CGAffineTransform(rotationAngle: note.turn ?? 0)), scale = box.width / oldBox.width
+                note.anchor = CGPoint(x: box.minX + (own.x - oldBox.minX) * scale, y: box.minY + (own.y - oldBox.minY) * scale)
+                    .applying(CGAffineTransform(rotationAngle: -(note.turn ?? 0)))
+                note.rect = box
+            }
             let date = Date() + Double(n + 1) / 1000  // its own date
             let ink = try Self.drawn(drawing, in: box, turn: note.turn ?? 0, zoom: note.zoom, date: date)
             (note.source, note.reply, note.inked) = (drawing, drawing.say, date)
@@ -1080,6 +1249,11 @@ final class Marks {
             guard let self else { return nil }
             editing.subtract(batch.ids)
             guard present(Array(marks)) else { return nil }
+            do { try validate(placements, batch) }
+            catch {
+                failed(batch, done: {}, speech: speech, question: error.localizedDescription)
+                return nil
+            }
             var change = Change(remove: marks), reveals: [(id: String, lines: [[CGPoint]], letters: Int)] = [], said: [String] = []
             let base = Date()
             for (i, target) in batch.targets.enumerated() where redrawn[target.id] != nil || replies[target.id] != nil {
@@ -1087,6 +1261,17 @@ final class Marks {
                 guard !old.isEmpty || target.picture != nil, notes.contains(where: { $0.id == target.id && $0.inked == target.inked }) else { continue }
                 if let redraw = redrawn[target.id] {
                     change.add += redraw.ink
+                    if let box = placements[target.id], let oldBox = target.rect {
+                        let scale = box.width / oldBox.width, turn = target.turn ?? 0
+                        let move = CGAffineTransform(rotationAngle: turn)
+                            .concatenating(CGAffineTransform(translationX: -oldBox.minX, y: -oldBox.minY))
+                            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+                            .concatenating(CGAffineTransform(translationX: box.minX, y: box.minY))
+                            .concatenating(CGAffineTransform(rotationAngle: -turn))
+                        let frames = frames(of: target)
+                        change.add += frames.map { var stroke = $0; stroke.transform = stroke.transform.concatenating(move); return stroke }
+                        change.remove.formUnion(frames.map(Self.id))
+                    }
                     if let note = redraw.note { change.notes.append(note) }
                     said.append(redraw.note?.reply ?? "Removed \(target.reading)")
                 } else if let reply = replies[target.id] {
@@ -1117,6 +1302,12 @@ final class Marks {
                 guard let self else { return }
                 fadeOut(left)
                 for reveal in reveals { written.first { $0.note.id == reveal.id }?.reveal(reveal.lines, letters: reveal.letters) }
+                for id in pictures.keys {
+                    guard let view = self.pictures.first(where: { $0.note.id == id }), !UIAccessibility.isReduceMotionEnabled else { continue }
+                    view.alpha = 0
+                    MapleStyle.animate(0.5) { view.alpha = 1 }
+                }
+                flash("Updated together")
                 UIAccessibility.post(notification: .announcement, argument: said.isEmpty ? result.reading : said.joined(separator: "\n"))
             }
             return change
@@ -1124,14 +1315,29 @@ final class Marks {
     }
 
     /// Each drawing patched by its edits in turn, and each answer's new text. An edit with nothing in it changes nothing.
-    func patches(_ result: Agent.Edits, _ batch: Batch) throws -> (sources: [String: Drawing], replies: [String: String]) {
+    func patches(_ result: Agent.Edits, _ batch: Batch) throws -> (sources: [String: Drawing], replies: [String: String], placements: [String: CGRect]) {
+        guard (result.question ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw PlacementFailure(message: result.question!) }
         var sources: [String: Drawing] = [:], replies: [String: String] = [:]
+        var placements: [String: CGRect] = [:]
         for edit in result.edits {
             guard let n = Int(edit.target), batch.targets.indices.contains(n - 1) else { throw Plot.Failure("No target \(edit.target)") }
             let note = batch.targets[n - 1], reply = edit.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let placement = edit.placement {
+                guard note.mark == "frame", note.source != nil, let box = note.rect, box.width > 0, box.height > 0,
+                      placements[note.id] == nil, [placement.x, placement.y, placement.scale].allSatisfy(\.isFinite),
+                      (0.25 ... 4).contains(placement.scale) else { throw PlacementFailure(message: "How should I move or resize the selected drawings?") }
+                let around = Self.editArea(batch).around, scale = Self.scale(around)
+                guard (0 ... around.width * scale).contains(placement.x), (0 ... around.height * scale).contains(placement.y) else {
+                    throw PlacementFailure(message: "Where on screen should I put the selected drawings?")
+                }
+                let center = CGPoint(x: around.minX + placement.x / scale, y: around.minY + placement.y / scale)
+                    .applying(CGAffineTransform(rotationAngle: (note.turn ?? 0) - batch.turn))
+                let size = CGSize(width: box.width * placement.scale, height: box.height * placement.scale)
+                placements[note.id] = CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width, height: size.height)
+            }
             let repaint = !(edit.repaint ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             if let source = sources[note.id] ?? note.source {
-                guard !edit.parts.isEmpty || !edit.plot.expression.trimmingCharacters(in: .whitespaces).isEmpty || repaint
+                guard edit.placement != nil || !edit.parts.isEmpty || !edit.plot.expression.trimmingCharacters(in: .whitespaces).isEmpty || repaint
                     || edit.figure?.points.isEmpty == false || edit.computed?.empty == false else { continue }
                 sources[note.id] = source.patched(parts: edit.parts, plot: edit.plot, say: edit.say, figure: edit.figure ?? Figure(), computed: edit.computed ?? Computed())
             } else if !reply.isEmpty {
@@ -1139,7 +1345,52 @@ final class Marks {
             }
         }
         guard !sources.isEmpty || !replies.isEmpty else { throw Plot.Failure("No edits: \(result.reading)") }
-        return (sources, replies)
+        try validate(placements, batch)
+        return (sources, replies, placements)
+    }
+
+    struct PlacementFailure: LocalizedError {
+        var message: String
+        var errorDescription: String? { message }
+    }
+
+    /// Validate again when landing: handwriting or an eraser may have arrived while Muse was thinking.
+    func validate(_ placements: [String: CGRect], _ batch: Batch) throws {
+        guard !placements.isEmpty else { return }
+        for target in batch.targets {
+            guard notes.contains(target), target.source.map({ intact($0, strokes(of: target), in: target.rect) }) ?? true else {
+                throw PlacementFailure(message: "The selection changed. Circle the drawings again and tell me where they should go.")
+            }
+        }
+        let moving = batch.targets.filter { placements[$0.id] != nil }
+        let leaving = Set(moving.flatMap { (strokes(of: $0) + frames(of: $0)).map(Self.id) })
+        let obstacles = canvas.drawing.strokes.filter { !AgentPen.edit($0) && !leaving.contains(Self.id($0)) }
+            .flatMap { Self.points($0, every: 4 / batch.zoom) }
+        let screen = Room.box(batch.screen, CGAffineTransform(rotationAngle: batch.turn))
+        var placed: [CGRect] = []
+        for target in moving {
+            let box = placements[target.id]!, turn = target.turn ?? 0
+            let visible = Self.turned(box, from: turn, to: batch.turn)
+            guard [box.minX, box.minY, box.width, box.height].allSatisfy(\.isFinite),
+                  min(box.width, box.height) * batch.zoom >= 24, screen.contains(visible),
+                  !placed.contains(where: { $0.intersects(visible.insetBy(dx: -3 / batch.zoom, dy: -3 / batch.zoom)) }) else {
+                throw PlacementFailure(message: "Where on screen should these fit without overlapping? Mark a clear spot or ask for a smaller size.")
+            }
+            placed.append(visible)
+            let frame = CGAffineTransform(rotationAngle: turn), padded = box.insetBy(dx: -2 / batch.zoom, dy: -2 / batch.zoom)
+            let inkOverlap = obstacles.contains { line in
+                let points = line.map { $0.applying(frame) }
+                return points.contains(where: padded.contains) || zip(points, points.dropFirst()).contains { a, b in
+                    CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+                        .insetBy(dx: -1 / batch.zoom, dy: -1 / batch.zoom).intersects(padded)
+                }
+            }
+            let pictureOverlap = notes.contains { $0.picture != nil && placements[$0.id] == nil && Self.box($0, turn: turn).intersects(padded) }
+            let cornerOverlap = batch.avoid.contains { Room.box($0, frame).intersects(padded) }
+            guard !inkOverlap, !pictureOverlap, !cornerOverlap else {
+                throw PlacementFailure(message: "That spot overlaps something on the page. Can you mark a clear destination or ask for a smaller size?")
+            }
+        }
     }
 
     /// Fades edit marks just taken off the page out where they lay: a picture of them over the page, which isn't redrawn
@@ -1186,6 +1437,7 @@ final class Marks {
         bubble.deleted = { [weak self, weak bubble] in
             guard let self, let bubble else { return }
             notes.removeAll { $0.id == bubble.note?.id }
+            retrying.removeAll { $0.dot === bubble }
             bubbles.removeAll { $0 === bubble }
             bubble.removeFromSuperview()
             save()

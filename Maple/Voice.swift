@@ -5,20 +5,20 @@ import UIKit
 @MainActor final class Voice: NSObject, AVAudioRecorderDelegate {
     enum State { case idle, permission, recording, ready, transcribing, answering }
     private(set) var state = State.idle { didSet { update() } }
-    let button = UIButton(configuration: .tinted())
+    let button = MapleButton(minimumWidth: 160)
     weak var controller: CanvasController?
     private var recorder: AVAudioRecorder?
     private var recordingURL: URL?
     private var audioActive = false
     private var task: Task<Void, Never>?
     private var squeezing = false
+    private var editMarks: Set<String> = []
+    private var selection: [Note] = []
+    private var meter: Timer?
 
     init(controller: CanvasController) {
         self.controller = controller
         super.init()
-        button.configuration?.cornerStyle = .capsule
-        button.configuration?.imagePadding = 8
-        button.configuration?.baseForegroundColor = Marks.ink
         button.accessibilityIdentifier = "voice-input"
         button.addAction(UIAction { [weak self] _ in self?.tap() }, for: .primaryActionTriggered)
         button.translatesAutoresizingMaskIntoConstraints = false
@@ -28,7 +28,7 @@ import UIKit
         ])
         NotificationCenter.default.addObserver(self, selector: #selector(resignActive), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(cancel), name: UIApplication.didEnterBackgroundNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(cancel), name: AVAudioSession.interruptionNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: AVAudioSession.interruptionNotification, object: nil)
         update()
     }
 
@@ -55,6 +55,11 @@ import UIKit
         guard controller?.marks.enabled == true else { return }
         switch state {
         case .idle:
+            editMarks = Set(controller?.canvas.drawing.strokes.filter(AgentPen.edit).map(Marks.id) ?? [])
+            if !editMarks.isEmpty {
+                guard let batch = controller?.marks.batch(editMarks, together: true) else { return fail(Muse.Failure("Those marks are already being edited. Wait for that edit, then try again.")) }
+                selection = batch.targets
+            } else { selection = [] }
             state = .permission
             task = Task { [weak self] in
                 guard let self else { return }
@@ -80,6 +85,7 @@ import UIKit
                     ])
                     self.recorder = recorder
                     recorder.delegate = self
+                    recorder.isMeteringEnabled = true
                     guard recorder.record(forDuration: 60) else { throw Muse.Failure("Couldn't start the microphone. Please try again.") }
                     state = .recording
                     task = nil
@@ -109,7 +115,7 @@ import UIKit
                 let transcript = try await Transcribe(key: muse.key).transcribe(wav)
                 try Task.checkCancellation()
                 state = .answering
-                try await controller.marks.askVoice(transcript)
+                try await controller.marks.askVoice(transcript, editMarks: editMarks, selection: selection)
                 try Task.checkCancellation()
                 state = .idle
                 task = nil
@@ -130,6 +136,10 @@ import UIKit
     @objc private func resignActive() {
         // The microphone permission dialog itself temporarily deactivates the app.
         if state != .permission { cancel() }
+    }
+
+    @objc nonisolated private func interrupted() {
+        Task { @MainActor [weak self] in self?.cancel() }
     }
 
     private func discardRecording() {
@@ -156,20 +166,38 @@ import UIKit
     }
 
     private func update() {
+        controller?.marks.voiceActive = state != .idle
         controller?.pencilSound?.suspended = [.permission, .recording, .ready].contains(state)
-        let (title, symbol, hint): (String, String, String) = switch state {
-        case .idle: ("Record", "mic", "Squeeze and hold Apple Pencil Pro to record, then release to send. Or tap here to start and stop.")
-        case .permission: ("Cancel", "xmark", "Cancel microphone setup.")
-        case .recording: ("Recording…", "stop.fill", "Release the Pencil squeeze or tap here to stop and send your question.")
-        case .ready: ("Release to send", "arrow.up", "One-minute limit reached. Release the Pencil squeeze or tap here to send.")
-        case .transcribing: ("Transcribing…", "xmark", "Tap to cancel.")
-        case .answering: ("Thinking…", "xmark", "Tap to cancel.")
+        let (title, mark, hint): (String, MapleButton.Mark, String) = switch state {
+        case .idle: ("Record", .symbol("mic"), "Squeeze and hold Apple Pencil Pro to record a question, or circle Maple drawings with the edit brush and say what to change. Release to send. Or tap here to start and stop.")
+        case .permission: ("Allow mic", .loading, "Cancel microphone setup.")
+        case .recording: ("Recording", .waveform, "Release the Pencil squeeze or tap here to stop and send your question.")
+        case .ready: ("Release to send", .symbol("arrow.up"), "One-minute limit reached. Release the Pencil squeeze or tap here to send.")
+        case .transcribing: ("Transcribing", .loading, "Tap to cancel.")
+        case .answering: ("Thinking", .orb, "Tap to cancel.")
         }
-        button.configuration?.title = title
-        button.configuration?.image = UIImage(systemName: symbol)
-        button.configuration?.baseForegroundColor = state == .recording ? .systemRed : Marks.ink
+        let recording = state == .recording || state == .ready
+        let color: UIColor = recording ? MapleStyle.coral : state == .idle ? .label : Marks.ink
+        button.display(title, mark: mark, color: color, filled: state != .idle,
+                       detail: state == .recording ? "0:00" : [.permission, .transcribing, .answering].contains(state) ? "×" : "")
         button.accessibilityLabel = state == .recording ? "Stop recording and send" : title
         button.accessibilityHint = hint
+        meter?.invalidate()
+        meter = nil
+        if state == .recording {
+            meter = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateMeter() }
+            }
+        }
+    }
+
+    private func updateMeter() {
+        guard state == .recording, let recorder else { return }
+        recorder.updateMeters()
+        let seconds = min(60, Int(recorder.currentTime))
+        button.detail.text = String(format: "%d:%02d", seconds / 60, seconds % 60)
+        button.level(CGFloat(pow(10, recorder.averagePower(forChannel: 0) / 35)))
+        button.setNeedsLayout()
     }
 
     nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {

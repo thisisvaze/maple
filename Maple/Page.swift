@@ -84,13 +84,15 @@ nonisolated struct Page: Identifiable, Hashable {
     /// True when the name changed or was cleared: a page with no ink left goes back to Untitled.
     @concurrent func nameFromInk() async -> Bool {
         guard Marks.aiEnabled, !Task.isCancelled else { return false }
-        guard let muse = Muse.bundled, let drawing = try? load() else { return false }
+        guard let muse = Muse.bundled else { return false }
+        let archive = try? loadArchive()
+        guard let drawing = try? archive?.current.drawing ?? load() else { return false }
         guard !drawing.strokes.isEmpty else { return (try? FileManager.default.removeItem(at: autoNameFile)) != nil }
         let v = UserDefaults.standard.array(forKey: viewportKey) as? [Double] ?? []
         let level = drawing.transformed(using: CGAffineTransform(rotationAngle: v.count == 4 ? v[3] : 0))
         // ponytail: one picture of all the ink, so writing spread far apart gets small; crop to the densest part if names suffer.
         let png = Marks.png(level, level.bounds.insetBy(dx: -40, dy: -40))
-        let readings = ((try? loadNotes()) ?? []).map(\.reading)
+        let readings = ((try? archive?.current.notes ?? loadNotes()) ?? []).map(\.reading)
         let current = try? String(contentsOf: autoNameFile, encoding: .utf8)
         guard Marks.aiEnabled, !Task.isCancelled else { return false }
         guard let name = try? await Agent(muse: muse).name(page: png, readings: readings, current: current) else { return false }
@@ -119,7 +121,8 @@ nonisolated struct Page: Identifiable, Hashable {
     @concurrent func thumbnail(dark: Bool) async -> UIImage? {
         let cached = url.appending(path: dark ? "thumb-dark.png" : "thumb-light.png")
         if modified(cached) >= modified(contentFile), let image = UIImage(contentsOfFile: cached.path) { return image }
-        guard let drawing = try? load(), !drawing.strokes.isEmpty else { return nil }
+        let archive = try? loadArchive()
+        guard let drawing = try? archive?.current.drawing ?? load(), !drawing.strokes.isEmpty else { return nil }
         let b = drawing.bounds.insetBy(dx: -40, dy: -40)
         // Never closer than about a screen width, so a single word stays word-sized on its card.
         let width = max(b.width, b.height * Page.aspect, 1032)
@@ -127,8 +130,8 @@ nonisolated struct Page: Identifiable, Hashable {
         let scale = 600 / width  // 600 px wide
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        let painted = ((try? loadNotes()) ?? []).filter { $0.picture != nil }
-        let image: UIImage? = UIGraphicsImageRenderer(size: CGSize(width: frame.width * scale, height: frame.height * scale), format: format).image { context in
+        let painted = ((try? archive?.current.notes ?? loadNotes()) ?? []).filter { $0.picture != nil }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: frame.width * scale, height: frame.height * scale), format: format).image { context in
             context.cgContext.scaleBy(x: scale, y: scale)
             context.cgContext.translateBy(x: -frame.minX, y: -frame.minY)
             for note in painted {
@@ -142,7 +145,7 @@ nonisolated struct Page: Identifiable, Hashable {
                 drawing.image(from: frame, scale: scale).draw(in: frame)
             }
         }
-        try? image?.pngData()?.write(to: cached, options: .atomic)
+        try? image.pngData()?.write(to: cached, options: .atomic)
         return image
     }
 }

@@ -193,12 +193,17 @@ struct Card: View {
     var selected: Bool?  // nil when not selecting
     let zoom: Namespace.ID
     @State var image: UIImage?
+    @State var loading = true
     @Environment(\.colorScheme) var scheme
+    @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     var body: some View {
         Color(uiColor: .paper)
             .aspectRatio(Page.aspect, contentMode: .fit)
-            .overlay { if let image { Image(uiImage: image).resizable().scaledToFit() } }
+            .overlay {
+                if let image { Image(uiImage: image).resizable().scaledToFit() }
+                else if loading { GalleryOrb().frame(width: 34, height: 34).accessibilityLabel("Loading page preview") }
+            }
             .clipShape(.rect(cornerRadius: 6))
             .matchedTransitionSource(id: page.id, in: zoom) { $0.clipShape(.rect(cornerRadius: 6)) }
             .overlay {
@@ -217,7 +222,18 @@ struct Card: View {
             }
             .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
             .task(id: [page, scheme] as [AnyHashable]) {
-                image = await page.thumbnail(dark: scheme == .dark)
+                loading = true
+                let thumbnail = await page.thumbnail(dark: scheme == .dark)
+                guard !Task.isCancelled else { return }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.28)) {
+                    image = thumbnail
+                    loading = false
+                }
             }
     }
+}
+
+private struct GalleryOrb: UIViewRepresentable {
+    func makeUIView(context: Context) -> Thinking { Thinking(style: .orb) }
+    func updateUIView(_ view: Thinking, context: Context) {}
 }

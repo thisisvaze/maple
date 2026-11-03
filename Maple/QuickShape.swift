@@ -75,7 +75,7 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let pen, touches.contains(pen) { abandon() }
+        if let pen, touches.contains(pen) { clear() }
         lifted(touches)
     }
 
@@ -88,7 +88,7 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
     override func reset() {
         super.reset()
         fingers.removeAll()
-        if pen != nil { abandon() }
+        if pen != nil { clear() }
     }
 
     /// The pen touched down at `point`.
@@ -171,8 +171,6 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
         clear()
         if let landed, let base { controller?.place(landed, snapped: base, drawn: drawn, drawnSince: began) }
     }
-
-    func abandon() { clear() }
 
     func clear() {
         resting?.cancel()

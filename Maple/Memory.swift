@@ -102,10 +102,13 @@ nonisolated struct Memory: Codable, Equatable, Sendable {
     /// their ink is the record: a line they rubbed out goes.
     mutating func written(_ lines: [String], page: String, date: Date = .now) {
         let lines = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.prefix(Self.most)
-        for entry in entries where entry.author == "you" && !lines.contains(entry.text) { note(date, "rubbed out", entry.text, "the person") }
-        entries.removeAll { $0.author == "you" && !lines.contains($0.text) }
-        for line in lines where !entries.contains(where: { $0.author == "you" && $0.text == line }) {
-            entries.append(Entry(id: "m\(next)", text: String(line.prefix(200)), author: "you", because: line, page: page, date: date))
+        let texts = Set(lines.map { String($0.prefix(200)) })
+        for entry in entries where entry.author == "you" && !texts.contains(entry.text) { note(date, "rubbed out", entry.text, "the person") }
+        entries.removeAll { $0.author == "you" && !texts.contains($0.text) }
+        for line in lines {
+            let text = String(line.prefix(200))
+            guard !entries.contains(where: { $0.author == "you" && $0.text == text }) else { continue }
+            entries.append(Entry(id: "m\(next)", text: text, author: "you", because: line, page: page, date: date))
             next += 1
             note(date, "written", line, "the person")
         }

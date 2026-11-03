@@ -1,11 +1,16 @@
-pencil.wav is a generated paper-friction texture based on Skuzic's
-src/audio/touch.ts and ios/Skuzic/Audio/TouchEngine.swift by Aaditya Vaze.
-Motion smoothing in PencilSound.swift uses the same 40 ms time constant.
+PencilSynth.swift synthesises the pencil's sound as it's drawn: a scraping model in which
+the nib reads a paper-tooth profile laid out along the stroke (five scales, 1.2 to 0.025
+points), so grain pitch and density follow pen speed; graphite crackle at about two
+fibres per point; a 420 Hz sheet resonance; and a speed-tracking low-pass. It contains no
+recordings and needs no runtime downloads. checks/pencil-check.swift measures it.
 
-Generated offline by tools/render-pencil.py: 140 Hz paper grain, roughness
-0.85, 4.2 kHz low-pass, 700 Hz high-pass and a 5 dB peak at 3.2 kHz.
-Four seconds of mono 24 kHz PCM, with an equal-power seamless wrap.
-It contains no recorded strokes or pen lifts, and needs no runtime downloads.
+The eraser and edit brush reuse the same motion model with distinct contact scales,
+filters and fibre levels: a broad rubber rub and a finer felt swish. The original
+pencil parameters are unchanged. All three fade with speed, pressure and pen lift.
+
+The approach follows Skuzic's touch engine (src/audio/touch.ts and
+ios/Skuzic/Audio/TouchEngine.swift) by Aaditya Vaze, whose grain also speeds up with the
+pen; PencilSound.swift keeps its 40 ms motion smoothing and 60 ms still-pen silence.
 
 MIT License
 

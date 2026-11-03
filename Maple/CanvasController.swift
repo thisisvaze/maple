@@ -14,10 +14,8 @@ final class Turner: UIWindow {
         guard let controller, let sound = controller.pencilSound else { return }
         for touch in event.allTouches ?? [] where touch.type == .pencil {
             guard touch.view?.isDescendant(of: controller.canvas) == true else { continue }
-            if controller.canvas.tool is PKInkingTool {
-                let samples = touch.phase == .moved ? event.coalescedTouches(for: touch) ?? [touch] : [touch]
-                for sample in samples { sound.touch(sample, in: controller.view) }
-            } else { sound.stop() }
+            let samples = touch.phase == .moved ? event.coalescedTouches(for: touch) ?? [touch] : [touch]
+            for sample in samples { sound.touch(sample, in: controller.view, material: controller.soundMaterial) }
         }
     }
 
@@ -65,7 +63,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     /// the ink with the canvas turned, 5 with a turner, 10 with the page straight).
     let turner = Turner()
     let pen = PKInkingTool(.pen, color: .graphite, width: penWidth)
-    let toolName = UILabel()  // names the tool for a moment after a double-tap
+    let toolName = StatusLabel()  // names the tool for a moment after a double-tap
     var loadError: (any Error)?
     var dirty = false
     var laidOutSize = CGSize.zero  // the screen the page was last laid out for
@@ -80,7 +78,9 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var marks: Marks!
     private(set) var voice: Voice?
     let controls = UIStackView()
-    let aiButton = UIButton(configuration: .tinted())
+    let aiButton = MapleButton(minimumWidth: 94)
+    let toolDock = UIStackView()
+    let toolButtons = (0..<3).map { _ in MapleButton() }
     var pencilSound: PencilSound!
 
     // The responder chain and finger taps share the page's persistent history.
@@ -96,6 +96,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     /// Whether the edit brush is in hand, told by its colour, as its marks are.
     var brushing: Bool { (canvas.tool as? PKInkingTool).map { AgentPen.edit(PKStroke(ink: $0.ink, path: PKStrokePath())) } ?? false }
+
+    var soundMaterial: PencilSynth.Material { canvas.tool is PKEraserTool ? .eraser : brushing ? .edit : .pencil }
 
     init(page: Page) {
         self.page = page
@@ -178,29 +180,56 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         twist.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
         twist.delegate = self
         turner.addGestureRecognizer(twist)
+        for gesture in [canvas.panGestureRecognizer, canvas.pinchGestureRecognizer, twist].compactMap({ $0 }) {
+            gesture.addTarget(self, action: #selector(navigationChanged))
+        }
         quickShape = QuickShape(controller: self)
         canvas.addGestureRecognizer(quickShape)
         quickMenu = QuickMenu(controller: self)
         pencilSound = PencilSound()
-        controls.spacing = 8
+        controls.spacing = 3
         controls.alignment = .center
+        controls.isLayoutMarginsRelativeArrangement = true
+        controls.layoutMargins = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
+        MapleStyle.surface(controls, radius: 19)
         controls.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(controls)
         controls.addArrangedSubview(aiButton)
+        marks.statusAnchor = controls
         NSLayoutConstraint.activate([
             controls.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            controls.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            controls.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
             aiButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
         ])
-        aiButton.configuration?.cornerStyle = .capsule
-        aiButton.configuration?.imagePadding = 6
-        aiButton.configuration?.image = UIImage(systemName: "sparkles")
         aiButton.accessibilityIdentifier = "ai-toggle"
         aiButton.addAction(UIAction { [weak self] _ in self?.toggleAI() }, for: .primaryActionTriggered)
         setAIEnabled(Marks.aiEnabled)
+        toolDock.spacing = 3
+        toolDock.isLayoutMarginsRelativeArrangement = true
+        toolDock.layoutMargins = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
+        toolDock.translatesAutoresizingMaskIntoConstraints = false
+        MapleStyle.surface(toolDock, radius: 19)
+        toolDock.transform = CGAffineTransform(scaleX: 0.75, y: 0.75)
+        view.addSubview(toolDock)
+        for (index, button) in toolButtons.enumerated() {
+            toolDock.addArrangedSubview(button)
+            button.addAction(UIAction { [weak self] _ in
+                guard let self, !marks.penOn else { return }
+                switch index {
+                case 0: canvas.tool = pen; nameTool("Pen")
+                case 1: canvas.tool = eraser; nameTool("Eraser")
+                default: guard marks.enabled else { return }; canvas.tool = brush; nameTool("Edit")
+                }
+                updateTools()
+            }, for: .primaryActionTriggered)
+        }
+        let toolbarWidth = toolDock.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width
+        NSLayoutConstraint.activate([
+            toolDock.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 72 + toolbarWidth * 0.75 / 2),
+            toolDock.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 38),
+        ])
+        updateTools()
         view.addInteraction(UIPencilInteraction(delegate: self))  // in the key window: the Pencil's taps reach no other (30 Oct probe)
-        toolName.font = .preferredFont(forTextStyle: .headline)
-        toolName.adjustsFontForContentSizeCategory = true
         toolName.alpha = 0
         toolName.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleBottomMargin]
         view.addSubview(toolName)  // a label takes no touches
@@ -211,8 +240,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // One finger or a palm never moves the paper. Set here: PencilKit resets it to 1 on joining a window.
-        canvas.panGestureRecognizer.minimumNumberOfTouches = 2
-        canvas.panGestureRecognizer.maximumNumberOfTouches = 2  // three fingers call the quick menu
+        if canvas.panGestureRecognizer.minimumNumberOfTouches != 2 { canvas.panGestureRecognizer.minimumNumberOfTouches = 2 }
+        if canvas.panGestureRecognizer.maximumNumberOfTouches != 2 { canvas.panGestureRecognizer.maximumNumberOfTouches = 2 }  // three fingers call the quick menu
         // Only a new screen size moves the page: a label or button laid out mid-pinch, like Jev's tag, must not reset the zoom.
         guard view.bounds.width > 0, view.bounds.height > 0, view.bounds.size != laidOutSize else { return }
         if laidOutSize != .zero {
@@ -294,11 +323,11 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
             if brushing { canvas.tool = pen }
         }
         voice?.button.isEnabled = enabled
-        aiButton.configuration?.title = enabled ? "AI on" : "AI off"
-        aiButton.configuration?.baseForegroundColor = enabled ? Marks.ink : .secondaryLabel
+        aiButton.display(enabled ? "AI on" : "AI off", mark: enabled ? .orb : .symbol("pause.fill"), color: enabled ? MapleStyle.green : .secondaryLabel, filled: enabled)
         aiButton.accessibilityLabel = "AI assistance"
         aiButton.accessibilityValue = enabled ? "On" : "Off"
         aiButton.accessibilityHint = enabled ? "Turns off all AI actions and cancels pending requests." : "Turns on AI assistance."
+        updateTools()
     }
 
     /// The page point in the middle of the screen; survives rotation and different screen sizes.
@@ -363,8 +392,26 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         other === canvas.panGestureRecognizer || other === canvas.pinchGestureRecognizer
     }
 
-    @objc func undo() { history.undo() }
-    @objc func redo() { history.redo() }
+    @objc func navigationChanged(_ gesture: UIGestureRecognizer) {
+        let navigation = [canvas.panGestureRecognizer, canvas.pinchGestureRecognizer, gesture].compactMap { $0 }
+            + (turner.gestureRecognizers ?? []).filter { $0 is UIRotationGestureRecognizer }
+        // Replacing PencilKit's drawing during a gesture can cancel the fingers' pan, pinch or rotation.
+        marks.navigating = navigation.contains { $0.state == .began || $0.state == .changed }
+    }
+
+    @objc func undo() { history.undo(); updateTools() }
+    @objc func redo() { history.redo(); updateTools() }
+
+    func updateTools() {
+        let active = canvas.tool is PKEraserTool ? 1 : brushing ? 2 : 0
+        for (i, symbol) in ["pencil.tip", "eraser", "scribble.variable"].enumerated() {
+            let selected = i == active
+            toolButtons[i].display("", mark: .symbol(symbol), color: selected ? (i == 2 ? AgentPen.coral : Marks.ink) : .secondaryLabel, filled: selected)
+            toolButtons[i].accessibilityLabel = ["Pen", "Eraser", "Edit brush"][i]
+            toolButtons[i].accessibilityTraits = selected ? [.button, .selected] : .button
+        }
+        toolButtons[2].isEnabled = marks?.enabled == true
+    }
 
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
         guard UIPencilInteraction.preferredTapAction != .ignore else { return }
@@ -383,6 +430,11 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     func cycle() {
         let (tool, name): (any PKTool, String) = if canvas.tool is PKEraserTool { marks.enabled ? (brush, "Edit") : (pen, "Pen") } else if brushing { (pen, "Pen") } else { (eraser, "Eraser") }
         canvas.tool = tool
+        nameTool(name)
+        updateTools()
+    }
+
+    func nameTool(_ name: String) {
         toolName.layer.removeAllAnimations()
         toolName.text = name
         toolName.textColor = brushing ? AgentPen.coral : .secondaryLabel
@@ -390,7 +442,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         let safe = view.safeAreaLayoutGuide.layoutFrame
         toolName.frame.origin = CGPoint(x: (safe.midX - toolName.bounds.width / 2).rounded(), y: safe.minY + 12)
         toolName.alpha = 1
-        UIView.animate(withDuration: 0.3, delay: 1) { self.toolName.alpha = 0 }
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.28, delay: 1) { self.toolName.alpha = 0 }
         UIAccessibility.post(notification: .announcement, argument: name)
     }
 
@@ -470,10 +522,12 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         strokeStart = nil
         history.record(from: History.State(drawing: before, notes: marks.notes),
                        to: History.State(drawing: canvas.drawing, notes: marks.notes))
+        updateTools()
     }
 
     func changed() {
         dirty = true
+        updateTools()
         saveTask?.cancel()
         saveTask = Task {
             try? await Task.sleep(for: .seconds(1))  // write once the pen pauses

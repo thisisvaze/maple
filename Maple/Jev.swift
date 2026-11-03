@@ -32,7 +32,6 @@ nonisolated struct Jev: Sendable {
     struct Verdict: Sendable {
         var mark: String  // what Maple acts on: one of `marks`, or "writing" when Jev isn't sure enough
         var top: String  // Jev's first choice
-        var probability: Double  // of `top`
     }
 
     /// The gesture the red ink in `near` ends with.
@@ -49,7 +48,7 @@ nonisolated struct Jev: Sendable {
                 count. Red ink may also contain the end of the preceding word.
                 """]])["question"]?.noul ?? 0
         }
-        return Verdict(mark: Self.decide(top, probabilities, confirmedQuestion: confirmed), top: top, probability: probabilities[top, default: 0])
+        return Verdict(mark: Self.decide(top, probabilities, confirmedQuestion: confirmed), top: top)
     }
 
     // Calibration knobs: thresholds for real Pencil input, not a measured accuracy.

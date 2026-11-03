@@ -37,3 +37,24 @@ targets:
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         SWIFT_APPROACHABLE_CONCURRENCY: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  MapleDeviceChecks:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [checks/device]
+    dependencies:
+      - target: Maple
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.maple.device-checks
+        DEVELOPMENT_TEAM: 2FN5ZL5G56
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+schemes:
+  Maple:
+    build:
+      targets:
+        Maple: all
+    test:
+      targets: [MapleDeviceChecks]

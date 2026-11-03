@@ -18,6 +18,10 @@ final class Bubble: UIView {
     let orb = Thinking(style: .orb)
     let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     let label = UILabel()
+    let heading = UILabel()
+    let headingOrb = Thinking(style: .orb)
+    let retryLabel = UILabel()
+    let retrySymbol = UIImageView(image: UIImage(systemName: "exclamationmark.triangle"))
     let close = UIButton(configuration: .plain())
     let trash = UIButton(configuration: .plain())
 
@@ -31,16 +35,32 @@ final class Bubble: UIView {
         dot.layer.cornerRadius = 6
         addSubview(dot)
         addSubview(orb)
-        glass.cornerConfiguration = .uniformCorners(radius: .fixed(14))
+        glass.cornerConfiguration = .uniformCorners(radius: .fixed(18))
         addSubview(glass)
-        label.font = UIFontMetrics(forTextStyle: .callout).scaledFont(for: UIFont(name: "Handlee-Regular", size: 18) ?? .preferredFont(forTextStyle: .callout))  // the agent's hand
+        label.font = UIFontMetrics(forTextStyle: .callout).scaledFont(for: .systemFont(ofSize: 15))
         label.adjustsFontForContentSizeCategory = true
-        label.textColor = Marks.ink
+        label.textColor = .label
         label.numberOfLines = 0
         glass.contentView.addSubview(label)
+        heading.text = "Maple"
+        heading.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(for: .systemFont(ofSize: 12, weight: .semibold))
+        heading.adjustsFontForContentSizeCategory = true
+        heading.textColor = .secondaryLabel
+        glass.contentView.addSubview(heading)
+        glass.contentView.addSubview(headingOrb)
+        retryLabel.text = "Couldn’t finish. Try again"
+        retryLabel.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(for: .systemFont(ofSize: 12, weight: .medium))
+        retryLabel.adjustsFontForContentSizeCategory = true
+        retryLabel.textColor = MapleStyle.coral
+        retrySymbol.tintColor = MapleStyle.coral
+        retrySymbol.contentMode = .scaleAspectFit
+        addSubview(retryLabel)
+        addSubview(retrySymbol)
         for (button, title, image) in [(close, "Close", "minus"), (trash, "Delete", "trash")] {
             button.configuration?.baseForegroundColor = Marks.ink
             button.configuration?.image = UIImage(systemName: image)
+            button.configuration?.background.backgroundColor = MapleStyle.fill
+            button.configuration?.background.cornerRadius = 10
             button.accessibilityLabel = title
             glass.contentView.addSubview(button)
         }
@@ -68,17 +88,29 @@ final class Bubble: UIView {
 
     func toggle(_ open: Bool) {
         self.open = open
-        UIView.animate(springDuration: 0.35, bounce: 0.2) { self.update() }
+        MapleStyle.animate(0.32) { self.update() }
     }
 
     func update() {
-        dot.backgroundColor = retry == nil ? Marks.ink : .systemOrange
+        dot.backgroundColor = Marks.ink
         glass.isHidden = !open
+        headingOrb.isHidden = !open
+        retryLabel.isHidden = retry == nil
+        retrySymbol.isHidden = retry == nil
         isAccessibilityElement = !open
         accessibilityLabel = retry != nil ? "Couldn't answer. Try again" : note == nil ? "Thinking" : "Answer"
         let thinking = note == nil && retry == nil
         orb.isHidden = !thinking
-        dot.isHidden = open || thinking
+        dot.isHidden = open || thinking || retry != nil
+        backgroundColor = retry == nil ? .clear : .paper.withAlphaComponent(0.94)
+        layer.cornerRadius = 15
+        if retry != nil {
+            let width = max(190, retryLabel.intrinsicContentSize.width + 48)
+            bounds = CGRect(x: 0, y: 0, width: width, height: max(44, retryLabel.intrinsicContentSize.height + 20))
+            retrySymbol.frame = CGRect(x: 12, y: (bounds.height - 18) / 2, width: 18, height: 18)
+            retryLabel.frame = CGRect(x: 38, y: 0, width: bounds.width - 48, height: bounds.height)
+            return
+        }
         guard open, let note else {
             bounds = CGRect(x: 0, y: 0, width: thinking ? 34 : 28, height: thinking ? 34 : 28)
             dot.frame = CGRect(x: 8, y: 8, width: 12, height: 12)
@@ -88,12 +120,14 @@ final class Bubble: UIView {
         label.text = note.reply
         let textWidth = Self.width - 28
         let height = label.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude)).height
-        bounds = CGRect(x: 0, y: 0, width: Self.width, height: height + 58)
+        bounds = CGRect(x: 0, y: 0, width: Self.width, height: height + 96)
         glass.frame = bounds
-        label.frame = CGRect(x: 14, y: 14, width: textWidth, height: height)
-        let row = height + 20
-        trash.frame = CGRect(x: Self.width - 42, y: row, width: 36, height: 32)
-        close.frame = CGRect(x: Self.width - 78, y: row, width: 36, height: 32)
+        headingOrb.frame = CGRect(x: 10, y: 8, width: 24, height: 24)
+        heading.frame = CGRect(x: 39, y: 8, width: textWidth - 25, height: 24)
+        label.frame = CGRect(x: 14, y: 38, width: textWidth, height: height)
+        let row = height + 44
+        trash.frame = CGRect(x: Self.width - 54, y: row, width: 44, height: 44)
+        close.frame = CGRect(x: Self.width - 102, y: row, width: 44, height: 44)
     }
 
     /// Sits at its anchor and scales with the page since its mark was made; text stays sharp up to 3× that.

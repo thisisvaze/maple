@@ -49,6 +49,7 @@ nonisolated struct Computed: Codable, Equatable, Sendable {
         let finite = values.filter(\.isFinite).sorted()
         guard let first = finite.first, let last = finite.last, last > first else { throw Plot.Failure("The field is flat over this region") }
         let low = finite[finite.count / 1000], high = max(finite[finite.count * 999 / 1000], low + (last - first) * 1e-6)
+        guard high > low, high.isFinite, (high - low).isFinite else { throw Plot.Failure("The field's range can't be shaded") }
         let swings = low < 0 && high > 0 && min(-low, high) > 0.15 * max(-low, high), reach = max(-low, high)
         var pixels = [UInt8](repeating: 255, count: width * height * 4)
         for i in values.indices {

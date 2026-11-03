@@ -28,8 +28,9 @@ nonisolated enum Orb {
                 let (px, py, pz) = (x * scale, y * scale, z * scale)
                 let depthZ = py * sin(cameraTilt) + pz * cos(cameraTilt)
                 let depth = (depthZ / ringRadius + 1) / 2
-                dots.append(Dot(x: center + px, y: center - (py * cos(cameraTilt) - pz * sin(cameraTilt)), z: depthZ,
-                                radius: max(0.3, (1.0516 + 1.6252 * depth) * (1 - 0.25 * edge) * radiusScale),
+                let fullness = 0.56 + 0.44 * Double(lane) / 10  // approved Fuller original preset
+                dots.append(Dot(x: center + px * fullness, y: center - (py * cos(cameraTilt) - pz * sin(cameraTilt)) * fullness, z: depthZ,
+                                radius: max(0.3, (1.0516 + 1.6252 * depth) * (1 - 0.25 * edge) * radiusScale) * 1.05,
                                 alpha: 0.4 + 0.6 * depth))
             }
         }
@@ -56,8 +57,7 @@ nonisolated enum Orb {
     }
 }
 
-/// The pixel grid over a box being drawn in: grey cells about a 32nd of the box, a soft diagonal wave rolling through,
-/// and each cell flickering a little on its own clock.
+/// Grey cells about a 32nd of the box, with a soft diagonal wave and scattered grain.
 nonisolated enum PixelGrid {
     struct Cell {
         var rect: CGRect
@@ -90,14 +90,43 @@ final class Thinking: UIView {
     var lastFrame = 0.0
     var link: CADisplayLink?
     var active = UIApplication.shared.applicationState == .active
+    let particles = CALayer()
+    var dots: [CAShapeLayer] = []
+    let texture = CALayer()
+    var cells: [CAShapeLayer] = []
+    private var textureSize = CGSize.zero
+    var indicator: Thinking?
+    var pageZoom: CGFloat = 1
 
     init(style: Style) {
         self.style = style
         super.init(frame: .zero)
         isOpaque = false
         isUserInteractionEnabled = false
-        contentMode = .redraw
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: Thinking, _: UITraitCollection) in view.setNeedsDisplay() }
+        if style == .orb {
+            layer.addSublayer(particles)
+            let circle = CGPath(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2), transform: nil)
+            dots = (0..<484).map { _ in
+                let dot = CAShapeLayer()
+                dot.path = circle
+                particles.addSublayer(dot)
+                return dot
+            }
+        } else {
+            layer.addSublayer(texture)
+            cells = (0..<4).map { _ in
+                let cells = CAShapeLayer()
+                texture.addSublayer(cells)
+                return cells
+            }
+            let orb = Thinking(style: .orb)
+            addSubview(orb)
+            indicator = orb
+            isAccessibilityElement = true
+            accessibilityLabel = "Working on this image"
+        }
+        updateColors()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: Thinking, _: UITraitCollection) in view.updateColors() }
         let center = NotificationCenter.default  // selector observers leave with the view
         center.addObserver(self, selector: #selector(pause), name: UIApplication.willResignActiveNotification, object: nil)
         center.addObserver(self, selector: #selector(resume), name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -113,16 +142,51 @@ final class Thinking: UIView {
 
     override var isHidden: Bool { didSet { animate() } }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        particles.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        particles.bounds = CGRect(x: 0, y: 0, width: 64, height: 64)
+        particles.setAffineTransform(CGAffineTransform(scaleX: min(bounds.width, bounds.height) / 64, y: min(bounds.width, bounds.height) / 64))
+        if style == .pixels, bounds.size != textureSize {
+            textureSize = bounds.size
+            // Four retained shades let Core Animation breathe the texture without repainting it during a pinch.
+            let paths = (0..<4).map { _ in CGMutablePath() }
+            for cell in PixelGrid.frame(size: bounds.size, at: 0.6) {
+                let bin = min(3, max(0, Int((cell.alpha - 0.035) / 0.04)))
+                paths[bin].addRect(cell.rect)
+            }
+            for (cell, path) in zip(cells, paths) { cell.path = path }
+        }
+        CATransaction.commit()
+        let side = min(40 / pageZoom, min(bounds.width, bounds.height) * 0.65)
+        indicator?.frame = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
+    }
+
     @objc func pause() { active = false; animate() }
     @objc func resume() { active = true; animate() }
 
     /// Runs only while shown, in the foreground, and without Reduce Motion, which keeps a still frame.
     @objc func animate() {
         let running = window != nil && !isHidden && active && !UIAccessibility.isReduceMotionEnabled
+        if style == .pixels {
+            indicator?.isHidden = isHidden
+            if running, texture.animation(forKey: "shimmer") == nil {
+                let shimmer = CABasicAnimation(keyPath: "opacity")
+                shimmer.fromValue = 0.65
+                shimmer.toValue = 1
+                shimmer.duration = 2.2
+                shimmer.autoreverses = true
+                shimmer.repeatCount = .infinity
+                texture.add(shimmer, forKey: "shimmer")
+            } else if !running { texture.removeAnimation(forKey: "shimmer") }
+            return
+        }
         if running, link == nil {
             lastFrame = 0
             let link = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick))
-            let rate: Float = style == .orb ? 60 : 30
+            let rate: Float = 60
             link.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: rate, preferred: rate)
             link.add(to: .main, forMode: .common)
             self.link = link
@@ -130,41 +194,46 @@ final class Thinking: UIView {
             link?.invalidate()
             link = nil
         }
-        setNeedsDisplay()
+        renderOrb()
     }
 
     func tick(_ link: CADisplayLink) {
-        if lastFrame > 0 { time += min(link.timestamp - lastFrame, 0.05) * (style == .orb ? Orb.speed : 1) }
+        if lastFrame > 0 { time += min(link.timestamp - lastFrame, 0.05) * Orb.speed }
         lastFrame = link.timestamp
-        setNeedsDisplay()
+        renderOrb()
     }
 
-    /// Sits over `box`, a rect in the page turned by `turn`, and scales with the page, staying sharp up to 3×.
+    /// The texture scales as vector paths; zoom never allocates or redraws a page-sized bitmap.
     func place(over box: CGRect, turn: CGFloat, zoom: CGFloat) {
+        pageZoom = max(zoom, 0.1)
         layer.anchorPoint = .zero
         pin(to: box, turn: turn, zoom: zoom)
-        contentScaleFactor = traitCollection.displayScale * min(max(zoom, 1), 3)
+        setNeedsLayout()
     }
 
-    override func draw(_ rect: CGRect) {
-        guard let context = UIGraphicsGetCurrentContext() else { return }
-        let dark = traitCollection.userInterfaceStyle == .dark
-        func color(_ c: SIMD3<Double>, _ alpha: Double) -> CGColor { UIColor(red: c.x, green: c.y, blue: c.z, alpha: alpha).cgColor }
-        switch style {
-        case .orb:
-            let scale = min(bounds.width, bounds.height) / 64
-            context.translateBy(x: (bounds.width - 64 * scale) / 2, y: (bounds.height - 64 * scale) / 2)
-            context.scaleBy(x: scale, y: scale)
-            for dot in Orb.frame(at: time) {
-                context.setFillColor(color(Orb.color(dot, at: time, dark: dark), dot.alpha))
-                context.fillEllipse(in: CGRect(x: dot.x - dot.radius, y: dot.y - dot.radius, width: dot.radius * 2, height: dot.radius * 2))
-            }
-        case .pixels:
-            for cell in PixelGrid.frame(size: bounds.size, at: time) {
-                context.setFillColor(UIColor.secondaryLabel.withAlphaComponent(cell.alpha).cgColor)
-                context.fill(cell.rect)
-            }
+    private func updateColors() {
+        guard style == .pixels else { renderOrb(); return }
+        backgroundColor = .paper.withAlphaComponent(0.6)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (i, cell) in cells.enumerated() {
+            cell.fillColor = UIColor.secondaryLabel.resolvedColor(with: traitCollection).withAlphaComponent((0.055 + Double(i) * 0.04) * 0.3).cgColor
         }
+        CATransaction.commit()
+    }
+
+    func renderOrb() {
+        guard style == .orb else { return }
+        let dark = traitCollection.userInterfaceStyle == .dark
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (layer, dot) in zip(dots, Orb.frame(at: time)) {
+            let c = Orb.color(dot, at: time, dark: dark)
+            layer.fillColor = UIColor(red: c.x, green: c.y, blue: c.z, alpha: dot.alpha).cgColor
+            layer.position = CGPoint(x: dot.x, y: dot.y)
+            layer.setAffineTransform(CGAffineTransform(scaleX: dot.radius, y: dot.radius))
+        }
+        CATransaction.commit()
     }
 
     /// The display link holds its target strongly; this keeps it from keeping a removed view alive.

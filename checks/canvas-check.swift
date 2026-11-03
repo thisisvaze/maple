@@ -3,11 +3,11 @@
 //   sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > "$CHECK_DIR/Colors.swift"
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator -swift-version 6 \
 //     -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{CanvasController,PencilSound,QuickMenu,Export,QuickShape,Shape,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{Interface,CanvasController,PencilSound,PencilSynth,QuickMenu,Export,QuickShape,Shape,Voice,Transcribe,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
-//   cp Maple/*.jhf Maple/hand.json Maple/pencil.wav "$CHECK_DIR/Check.app/"
+//   cp Maple/*.jhf Maple/hand.json "$CHECK_DIR/Check.app/"
 //   xcrun simctl spawn booted "$CHECK_DIR/Check.app/canvas-check"
 import PencilKit
 import UniformTypeIdentifiers
@@ -215,12 +215,14 @@ struct Check {
         let c = turned.convert(CGPoint.zero, to: controller.view), d = turned.convert(CGPoint(x: 20, y: 0), to: controller.view)
         precondition(abs(c.y - d.y) < 0.5, "a bubble reads level on screen")
         try await brush()
+        try await moving()
         try await boxes()
         try me()
         try snapping()
         try quickMenu()
         try savedHistory()
         try voicePlacement()
+        try interface()
         print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame, edit brush")
     }
 
@@ -303,6 +305,75 @@ struct Check {
         let untouched = try Data(contentsOf: page.stateFile)
         precondition(untouched == bad)
         print("history ok: 100 compact steps, reload, redo branch, pixel erasure, answer notes, edit cleanup, corrupt-file protection")
+    }
+
+    static func interface() throws {
+        for time in [0.0, 0.6, 4, 20] {
+            let dots = Orb.frame(at: time)
+            precondition(dots.count == 484)
+            for dot in dots {
+                precondition([dot.x, dot.y, dot.radius, dot.alpha].allSatisfy(\.isFinite))
+                precondition(dot.x - dot.radius > 0 && dot.x + dot.radius < 64 && dot.y - dot.radius > 0 && dot.y + dot.radius < 64)
+            }
+            let opening = dots.map { hypot($0.x - 32, $0.y - 32) - $0.radius }.min()!
+            precondition((10...15).contains(opening), "Fuller original retains its smaller centre opening")
+        }
+        for size: CGFloat in [24, 34, 40] {
+            let orb = Thinking(style: .orb)
+            orb.frame.size = CGSize(width: size, height: size)
+            orb.layoutIfNeeded()
+            orb.renderOrb()
+            precondition(orb.dots.count == 484 && orb.dots.allSatisfy { $0.path != nil }, "orb particles keep vector paths at small sizes")
+            precondition(abs(orb.particles.affineTransform().a - size / 64) < 0.001)
+        }
+        let button = MapleButton(minimumWidth: 160)
+        let presentations: [(String, MapleButton.Mark, String)] = [("Record", .symbol("mic"), ""), ("Allow mic", .loading, "×"), ("Recording", .waveform, "0:08"), ("Release to send", .symbol("arrow.up"), ""), ("Transcribing", .loading, "×"), ("Thinking", .orb, "×")]
+        var widths: [CGFloat] = []
+        for (title, mark, detail) in presentations {
+            button.display(title, mark: mark, detail: detail)
+            widths.append(button.intrinsicContentSize.width)
+            button.frame.size = button.intrinsicContentSize
+            button.layoutIfNeeded()
+            precondition(button.bounds.height >= 44 && button.caption.frame.maxX <= button.bounds.maxX)
+            precondition(button.orb.isHidden == (mark != .orb) && button.waveform.isHidden == (mark != .waveform))
+        }
+        precondition(Set(widths).count == 1, "voice states keep a stable control width")
+        let page = Page(url: URL.temporaryDirectory.appending(path: UUID().uuidString), edited: .now)
+        let controller = open(page)
+        defer { controller.marks.stop(); controller.turner.isHidden = true }
+        controller.view.layoutIfNeeded()
+        precondition(controller.controls.frame.minY < controller.view.safeAreaInsets.top + 30)
+        precondition(abs(controller.toolDock.frame.minX - controller.view.safeAreaInsets.left - 72) < 1,
+                     "scaled toolbar starts 12 pt beside the Pages button")
+        precondition(abs(controller.toolDock.frame.midY - controller.view.safeAreaInsets.top - 38) < 1)
+        precondition(controller.toolDock.transform.a == 0.75 && controller.toolDock.transform.d == 0.75)
+        for text in ["Question recognized", "Updated together", String(repeating: "Noted: a longer update. ", count: 6)] {
+            controller.marks.flash(text)
+            controller.view.layoutIfNeeded()
+            let status = controller.marks.lastTag!
+            precondition(abs(status.frame.maxX - controller.controls.frame.minX + 10) < 1
+                         && abs(status.frame.midY - controller.controls.frame.midY) < 1,
+                         "status stays beside the AI controls")
+            precondition(status.frame.width <= 240 && !status.frame.intersects(controller.toolDock.frame)
+                         && !status.isUserInteractionEnabled, "compact status stays clear of the tools and takes no touches")
+            controller.setVoiceEnabled(true)
+        }
+        precondition(controller.soundMaterial == .pencil)
+        controller.toolButtons[1].sendActions(for: .primaryActionTriggered)
+        precondition(controller.canvas.tool is PKEraserTool)
+        precondition(controller.soundMaterial == .eraser, "eraser has its own rubbing sound")
+        controller.toolButtons[2].sendActions(for: .primaryActionTriggered)
+        precondition(controller.soundMaterial == .edit, "edit brush has its own felt sound")
+        controller.setAIEnabled(false)
+        precondition(!controller.toolButtons[2].isEnabled && controller.aiButton.orb.isHidden)
+        precondition(controller.soundMaterial == .pencil, "disabling edits restores the pencil sound with the pen")
+        controller.setAIEnabled(true)
+        precondition(controller.toolButtons[2].isEnabled && !controller.aiButton.orb.isHidden)
+        controller.cycle()
+        precondition(controller.soundMaterial == .eraser)
+        controller.cycle()
+        precondition(controller.soundMaterial == .edit, "Pencil double-tap uses the same sound routing")
+        print("interface ok: fuller vector orb, stable voice states, touch targets, tool dock, AI toggle and adjacent status")
     }
 
     static func voicePlacement() throws {
@@ -428,7 +499,10 @@ struct Check {
             }, creationDate: Date(timeIntervalSince1970: now + t)))
         }
         let lone = brushed([CGPoint(x: 1800, y: 2800), CGPoint(x: 1850, y: 2850)])
-        canvas.drawing.strokes += taps + [lone]
+        let agentInk = (0..<16).map { _ in
+            AgentPen.stroke([CGPoint(x: 1800, y: 2600), CGPoint(x: 1860, y: 2600)], width: 3, step: 2)
+        }
+        canvas.drawing.strokes += taps + agentInk + [lone]  // later AI and edit ink never hide the latest person strokes
         marks.penDown(editing: true)
         marks.penUp(writing: true, editing: true)
         precondition(marks.waiting?.isCancelled != false && marks.lastTrigger.isEmpty, "the brush's pen-up never starts reading a mark")
@@ -679,6 +753,160 @@ struct Check {
         try await Task.sleep(for: .seconds(2))
         precondition(!canvas.drawing.strokes.contains(where: AgentPen.edit) && Offline.requests == 4, "they join the next edit")
         marks.stop()
+    }
+
+    static func moving() async throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString), page = Page(url: folder, edited: .now)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let c = open(page), marks = c.marks!, canvas = c.canvas, history = c.history
+        c.rotation = 0.37
+        c.show(c.center, zoom: 1.6)
+        let turn = marks.turn, zoom = canvas.zoomScale
+        func box(_ rect: CGRect) -> CGRect { Room.box(marks.onPage(rect), CGAffineTransform(rotationAngle: turn)) }
+        func ring(_ rect: CGRect) -> PKStroke {
+            let points = marks.onPage(rect)
+            return PKStroke(ink: PKInk(.pen, color: AgentPen.coral), path: AgentPen.stroke(points + [points[0]], width: 3.5, step: 2).path)
+        }
+        let graph = Drawing.Graph(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0)
+        let firstBox = box(CGRect(x: 110, y: 180, width: 200, height: 160)), secondBox = box(CGRect(x: 460, y: 180, width: 150, height: 120))
+        let source = Drawing(reading: "triangle", kind: "ink", say: "A triangle", parts: [
+            .init(name: "triangle", strokes: [[[10, 10], [80, 10], [50, 65], [10, 10]]], labels: [])], plot: graph)
+        let picture = Drawing(reading: "garden", kind: "picture", say: "A garden", parts: [], plot: graph)
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).pngData { ctx in
+            UIColor.green.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        let file = try page.keep(png, as: "png"), date = Date()
+        let blueFrame = Marks.frame(secondBox, turn: turn, zoom: zoom)
+        let userFrame = PKStroke(ink: c.pen.ink, path: Marks.frame(firstBox, turn: turn, zoom: zoom).path)
+        let first = Note(mark: "frame", trigger: [], anchor: firstBox.origin.applying(CGAffineTransform(rotationAngle: -turn)), zoom: zoom,
+                         reading: "triangle", reply: source.say, turn: turn, rect: firstBox, inked: date, source: source)
+        let second = Note(mark: "frame", trigger: [Marks.id(blueFrame)], anchor: secondBox.origin.applying(CGAffineTransform(rotationAngle: -turn)), zoom: zoom,
+                          reading: "garden", reply: picture.say, turn: turn, rect: secondBox, inked: date + 1, source: picture, picture: file)
+        let ink = try Marks.drawn(source, in: firstBox, turn: turn, zoom: zoom, date: date)
+        let circles = [ring(CGRect(x: 95, y: 165, width: 230, height: 190)), ring(CGRect(x: 445, y: 165, width: 180, height: 150))]
+        let stroke = AgentPen.stroke(marks.onPage(CGRect(x: 90, y: 950, width: 500, height: 0)), width: 3, step: 2)
+        let handwriting = PKStroke(ink: c.pen.ink, path: stroke.path)
+        canvas.drawing.strokes = ink + [handwriting, blueFrame, userFrame] + circles
+        marks.notes = [first, second]
+        marks.sync()
+        history.removeAllActions()
+        let ids = Set(circles.map(Marks.id))
+        let batch = marks.batch(ids)!
+        precondition(batch.targets.count == 2)
+        let (_, around, targets) = await marks.request(batch)
+        precondition(UIImage(data: around) != nil && targets.allSatisfy { $0.overview?.count == 4 })
+        let plain = Marks.png(canvas.drawing.transformed(using: CGAffineTransform(rotationAngle: turn)), Marks.editArea(batch).around)
+        precondition(around != plain, "the edit context includes the picture under the ink")
+        let area = Marks.editArea(batch).around, pixels = Marks.scale(area)
+        func placement(_ x: CGFloat, _ y: CGFloat, _ scale: Double) -> Agent.Placement {
+            let p = marks.onPage(CGRect(x: x, y: y, width: 0, height: 0))[0].applying(CGAffineTransform(rotationAngle: turn))
+            return .init(x: (p.x - area.minX) * pixels, y: (p.y - area.minY) * pixels, scale: scale)
+        }
+        func edit(_ note: Note, _ placement: Agent.Placement) -> Agent.Edit {
+            .init(target: String(batch.targets.firstIndex(where: { $0.id == note.id })! + 1), reply: "", parts: [], plot: graph, say: "", placement: placement)
+        }
+        let result = Agent.Edits(reading: "same width, side by side", edits: [edit(first, placement(220, 600, 1.1)), edit(second, placement(520, 600, 220.0 / 150))])
+        _ = try marks.patches(.init(reading: "larger here", edits: [edit(second, placement(535, 240, 1.2))]), batch)
+        let oldView = marks.pictures[0]
+        try marks.land(result, batch)
+        marks.flush()
+        let moved = marks.notes
+        precondition(history.undoCount == 1 && moved.count == 2, "the two placements are one undo")
+        let a = moved.first { $0.id == first.id }!, b = moved.first { $0.id == second.id }!
+        precondition(abs(a.rect!.width - b.rect!.width) < 0.01 && abs(a.rect!.width - 220 / zoom) < 0.1)
+        near(c.canvas.convert(CGPoint(x: a.anchor.x * zoom, y: a.anchor.y * zoom), to: c.view), CGPoint(x: 110, y: 512))
+        precondition(a.source!.parts[0].strokes[0][0] == [11, 11], "stored part coordinates scale for subsequent edits")
+        precondition(b.picture == file && marks.pictures[0] !== oldView && marks.pictures[0].note.rect == b.rect,
+                     "a moved picture refreshes its view without repainting its file")
+        let movedFrame = marks.frames(of: b).first!
+        let frameBox = Room.box(Marks.points(movedFrame, every: 4).flatMap { $0 }, CGAffineTransform(rotationAngle: turn))
+        let originalFrame = Room.box(Marks.points(blueFrame, every: 4).flatMap { $0 }, CGAffineTransform(rotationAngle: turn))
+        let frameScale = b.rect!.width / secondBox.width
+        near(CGPoint(x: frameBox.midX, y: frameBox.midY), CGPoint(x: b.rect!.minX + (originalFrame.midX - secondBox.minX) * frameScale,
+                                                               y: b.rect!.minY + (originalFrame.midY - secondBox.minY) * frameScale))
+        precondition(canvas.drawing.strokes.first { Marks.id($0) == Marks.id(userFrame) }?.transform == userFrame.transform,
+                     "Maple's frame moves; a handwritten frame stays")
+        precondition(canvas.drawing.strokes.contains { Marks.id($0) == Marks.id(handwriting) }, "the person's writing stays")
+        history.undo()
+        precondition(marks.notes == [first, second] && marks.pictures[0].note.rect == secondBox)
+        history.redo()
+        precondition(marks.notes == moved)
+        c.saveNow()
+        Store.queue.sync {}
+        let saved = try page.loadNotes()
+        precondition(saved == moved, "placement survives a save")
+        history.undo()
+        canvas.drawing.strokes.append(contentsOf: circles.filter { circle in !canvas.drawing.strokes.contains { Marks.id($0) == Marks.id(circle) } })
+        func refused(_ edits: [Agent.Edit]) {
+            do { try marks.land(.init(reading: "bad", edits: edits), batch); preconditionFailure("invalid placement accepted") }
+            catch { precondition(marks.pending.isEmpty && marks.notes == [first, second]) }
+        }
+        refused([edit(first, .init(x: .infinity, y: 0, scale: 1))])
+        refused([edit(first, placement(220, 600, 0))])
+        refused([edit(first, placement(-500, 600, 1))])
+        refused([edit(first, placement(220, 950, 1))]) // handwriting
+        refused([edit(first, placement(530, 240, 1))]) // unselected picture
+        refused([edit(first, placement(350, 600, 1)), edit(second, placement(350, 600, 1))])
+        refused([edit(first, placement(220, 600, 1)), edit(first, placement(220, 600, 1))])
+        // New writing during the request cancels the entire arrangement when it lands.
+        try marks.land(result, batch)
+        let across = AgentPen.stroke(marks.onPage(CGRect(x: 100, y: 600, width: 500, height: 0)), width: 3, step: 2)
+        let later = PKStroke(ink: c.pen.ink, path: across.path)
+        canvas.drawing.strokes.append(later)
+        marks.flush()
+        precondition(marks.notes == [first, second] && marks.retrying.last?.dot.note?.reply.contains("overlaps") == true)
+        marks.sync()
+        precondition(marks.bubbles.contains { $0 === marks.retrying.last?.dot }, "clarification stays through drawing sync")
+        let questionRect = marks.retrying.last!.dot.convert(marks.retrying.last!.dot.bounds, to: c.view)
+        precondition(c.view.bounds.contains(questionRect), "clarification fits on screen")
+        canvas.drawing.strokes.removeAll { Marks.id($0) == Marks.id(later) }
+        marks.retire { _ in true }
+        // A partly erased drawing must not be resurrected by a pending resize.
+        try marks.land(result, batch)
+        canvas.drawing.strokes.removeAll { Marks.id($0) == Marks.id(ink[0]) }
+        marks.flush()
+        precondition(marks.notes == [first, second] && marks.retrying.last?.dot.note?.reply.contains("selection changed") == true)
+        canvas.drawing.strokes.append(contentsOf: ink)
+        marks.retire { _ in true }
+        // Recording holds the brush timer, then speech uses the selected targets through the existing edit endpoint.
+        marks.agent = Agent(muse: Muse(key: "offline"))
+        do {
+            try await marks.askVoice("Move them", editMarks: ids, selection: [first])
+            preconditionFailure("changed recording selection accepted")
+        } catch { precondition(marks.editing.isEmpty && marks.notes == [first, second]) }
+        marks.editing.insert(second.id)
+        precondition(marks.batch(ids, together: true) == nil, "a busy selected target cannot be silently omitted from a spoken edit")
+        marks.editing.removeAll()
+        marks.penDown(editing: true)
+        marks.penUp(writing: true, editing: true)
+        marks.voiceActive = true
+        try await Task.sleep(for: .seconds(1.7))
+        precondition(marks.editing.isEmpty && marks.notes == [first, second])
+        Offline.reply(#"{"reading":"move them","question":"Where should they go?","edits":[]}"#)
+        try await marks.askVoice("Move them", editMarks: ids)
+        precondition(marks.notes == [first, second] && marks.retrying.last?.dot.note?.reply == "Where should they go?")
+        precondition(marks.retrying.last?.previous?.contains("Move them") == true && marks.editing.isEmpty && marks.grids.isEmpty)
+        // Reply to the question using the same marks; an explicit cancellation leaves them available.
+        let cancelled = Task { try await marks.askVoice("Below", editMarks: ids) }
+        cancelled.cancel()
+        do { try await cancelled.value; preconditionFailure("cancelled edit sent") } catch {}
+        precondition(marks.notes == [first, second] && marks.editing.isEmpty)
+        let edits: [[String: Any]] = result.edits.map { item in
+            ["target": item.target, "reply": "", "parts": [], "plot": ["expression": "", "xMin": 0, "xMax": 0, "yMin": 0, "yMax": 0], "say": "",
+             "placement": ["x": item.placement!.x, "y": item.placement!.y, "scale": item.placement!.scale]]
+        }
+        Offline.reply(String(decoding: try JSONSerialization.data(withJSONObject: ["reading": "below", "question": "", "edits": edits]), as: UTF8.self))
+        try await marks.askVoice("Below", editMarks: ids)
+        marks.flush()
+        precondition(marks.notes != [first, second] && marks.retrying.isEmpty && marks.editing.isEmpty && marks.grids.isEmpty)
+        marks.voiceActive = false
+        marks.stop()
+        print("move/resize ok: rotated page, zoom, shared sizing, pictures, ink, undo/redo, save, invalid placements, collisions, stale selection, voice hold and clarification")
     }
 
     static func near(_ a: CGPoint, _ b: CGPoint) {

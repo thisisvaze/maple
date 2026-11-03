@@ -71,22 +71,39 @@ struct Check {
         let reply = hand.writable("Yeast breathes out CO₂ as it feeds; the gluten traps the gas, so the dough rises about 2× in 1½ hours (at 25 °C).")!
         for width: CGFloat in [60, 140, 300, 2000] {
             let lines = hand.wrap(reply, cap: cap, width: width)
-            precondition(lines.joined(separator: " ").split(separator: " ") == reply.split(separator: " "), "wrap keeps every word in order")
-            for line in lines where line.contains(" ") {
-                precondition(hand.width(line, cap: cap) <= width + 0.001, "line wider than \(width): \(line)")
+            precondition(lines.map(\.text).joined(separator: " ").split(separator: " ") == reply.split(separator: " "), "wrap keeps every word in order")
+            for line in lines where line.text.contains(" ") {
+                precondition(hand.width(line.text, cap: cap) <= width + 0.001, "line wider than \(width): \(line)")
             }
             let origin = CGPoint(x: 100, y: 50), box = hand.extent(lines, cap: cap).offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -0.001, dy: -0.001)
             let pen = hand.pen(lines, at: origin, cap: cap)
             precondition(!pen.isEmpty && pen.allSatisfy { $0.allSatisfy(box.contains) }, "ink outside its extent at width \(width)")
         }
-        precondition(hand.wrap("a supercalifragilistic b", cap: cap, width: 20) == ["a", "supercalifragilistic", "b"], "a long word keeps its own line")
-        precondition(hand.wrap(hand.writable("one\ntwo\n\nthree")!, cap: cap, width: 999) == ["one", "two", "", "three"], "line breaks are kept")
+        precondition(hand.wrap("a supercalifragilistic b", cap: cap, width: 20).map(\.text) == ["a", "supercalifragilistic", "b"], "a long word keeps its own line")
+        precondition(hand.wrap(hand.writable("one\ntwo\n\nthree")!, cap: cap, width: 999).map(\.text) == ["one", "two", "", "three"], "line breaks are kept")
+
+        // Muse's real Lisbon reply (2 Nov), at about the width Room gave it: greedy filling left "well.", "needed" and
+        // "by 6pm" alone. Each item now wraps evenly in the same number of lines, items have space between them, and an
+        // item's wrapped lines hang in; one paragraph is plain prose, without either.
+        let plan = hand.writable("Yes - perfect Friday day trip, fits your plan well.\nEarly train Rossio to Sintra, ~40min, no car needed\nBook Pena Palace 9:30am slot first, then Moorish Castle\nLunch in town, Quinta da Regaleira after, back by 6pm")!
+        let items = hand.wrap(plan, cap: 24, width: 640)
+        precondition(items.count == 8 && items.allSatisfy { $0.text.split(separator: " ").count >= 3 }, "no word left alone: \(items.map(\.text))")
+        precondition(items.enumerated().allSatisfy { i, line in i % 2 == 0 ? line.indent == 0 && line.above == (i == 0 ? 0 : Handwriting.itemGap) : line.indent == Handwriting.hang && line.above == 0 },
+                     "items spaced, their second lines hung in: \(items)")
+        let pairs = stride(from: 0, to: items.count, by: 2).map { (hand.width(items[$0].text, cap: 24), hand.width(items[$0 + 1].text, cap: 24)) }
+        precondition(pairs.allSatisfy { min($0.0, $0.1) > 0.5 * max($0.0, $0.1) }, "an item's lines are about as long as each other: \(pairs)")
+        let prose = hand.wrap(reply, cap: cap, width: 140)
+        precondition(prose.allSatisfy { $0.above == 0 && $0.indent == 0 } && prose.last!.text.contains(" "), "one paragraph is prose, evenly wrapped: \(prose.map(\.text))")
+        let ink = hand.extent(items, cap: 24), flat = hand.extent(items.map { Handwriting.Line($0.text) }, cap: 24)
+        precondition(ink.height > flat.height + 2 * Handwriting.itemGap * 24, "item gaps add height the extent sees, so Room makes room for them")
         // A power's brackets and a mixed number never break across lines.
         precondition(Handwriting.words("of x^(n + 1) is") == ["of", "x^(n + 1)", "is"] && Handwriting.words("x^(n + 1 is") == ["x^(n", "+", "1", "is"])
+        precondition(Handwriting.words("= 300 cm = 3.0 m, so your 3.2 m wall, 20 cm left, 2 rooms") == ["=", "300 cm", "=", "3.0 m,", "so", "your", "3.2 m", "wall,", "20 cm", "left,", "2", "rooms"],
+                     "a number keeps its unit")
         let power = hand.writable("The derivative of x^(n + 1) is (n + 1)x^n, about 2½ times.")!
         for width in stride(from: CGFloat(30), through: 300, by: 3) {
             let lines = hand.wrap(power, cap: cap, width: width)
-            precondition(lines.contains { $0.contains("x^(n + 1)") } && lines.contains { $0.contains("2\u{00A0}1/2") }, "split at \(width): \(lines)")
+            precondition(lines.contains { $0.text.contains("x^(n + 1)") } && lines.contains { $0.text.contains("2\u{00A0}1/2") }, "split at \(width): \(lines)")
         }
 
         // The extent is the ink's own (capitals 21 tall, so glyph units): an x starts at the x-height, a g's descender,

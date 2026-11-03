@@ -70,6 +70,16 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
     /// Nothing left to draw: an ink drawing whose parts have no strokes or labels.
     var blank: Bool { kind == "ink" && parts.allSatisfy { $0.strokes.isEmpty && $0.labels.isEmpty } }
 
+    /// Parts are stored in box points; plots and figures regenerate from their equations at the new size.
+    func scaled(by scale: CGFloat) -> Drawing {
+        var out = self
+        out.parts = parts.map { part in
+            Part(name: part.name, strokes: part.strokes.map { $0.map { $0.map { $0 * scale } } },
+                 labels: part.labels.map { Label(text: $0.text, x: $0.x * scale, y: $0.y * scale, size: $0.size * scale) })
+        }
+        return out
+    }
+
     /// This drawing with an edit's parts patched in by name, trimmed and in any case: a listed part replaces its namesake
     /// or is added, one with no strokes and no labels removes its namesake, and unlisted parts stay as they are. A plot
     /// with an expression, a figure with points, a computed picture with something to compute, and a non-empty say,

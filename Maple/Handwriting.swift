@@ -14,6 +14,20 @@ nonisolated struct Handwriting: Sendable {
     static let raise: CGFloat = 0.45, small: CGFloat = 0.62  // calibration knob: a power's baseline lift and size
     static let drop: CGFloat = 0.25  // calibration knob: a subscript's baseline drop; it is `small` too
     static let greekSize: CGFloat = 0.8  // calibration knob: lowercase Greek, to sit with the hand's x-height
+    static let itemGap: CGFloat = 0.45  // calibration knob: extra space above each line of a list, so items don't run together
+    static let hang: CGFloat = 0.9  // calibration knob: how far a list item's wrapped lines sit in from its first
+    /// Units a number keeps on its line, as a typesetter's non-breaking space would: never "300 / cm".
+    static let units: Set<String> = ["mm", "cm", "m", "km", "in", "ft", "mi", "g", "kg", "mg", "lb", "oz", "ml", "l", "L", "s", "min", "h", "hr", "hrs",
+                                     "am", "pm", "%", "°", "°C", "°F", "px", "pt", "x", "×"]
+
+    /// One written line: its text, the extra space above it and how far in it starts, both in capitals. A string
+    /// literal is a plain line, so a single line can still be written as "x = 7".
+    struct Line: Equatable, Sendable, ExpressibleByStringLiteral {
+        var text: String
+        var above: CGFloat = 0, indent: CGFloat = 0
+        init(_ text: String, above: CGFloat = 0, indent: CGFloat = 0) { (self.text, self.above, self.indent) = (text, above, indent) }
+        init(stringLiteral text: String) { self.init(text) }
+    }
 
     /// Unicode Greek on the Greek face's ASCII positions, laid out like the Symbol font (p is pi), with the maths signs
     /// that are Greek letters: micro, partial, increment, n-ary sum and product. Its only theta is the open ϑ, so θ writes
@@ -106,21 +120,43 @@ nonisolated struct Handwriting: Sendable {
         return trimmed
     }
 
-    /// Greedy word wrap of `writable` text at `width`, keeping its line breaks. A word wider than the width keeps a
-    /// line to itself; words are never split.
-    func wrap(_ text: String, cap: CGFloat, width: CGFloat) -> [String] {
-        var lines: [String] = []
-        for paragraph in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            var line = ""
-            for word in Self.words(paragraph) {
-                let candidate = line.isEmpty ? word : line + " " + word
-                if line.isEmpty || self.width(candidate, cap: cap) <= width { line = candidate }
-                else { lines.append(line); line = word }
+    /// Word wrap of `writable` text at `width`, keeping its line breaks. Each paragraph is wrapped as evenly as it
+    /// can be in as few lines as greedy filling needs, so no word is left alone on a last line. With more than one
+    /// paragraph it reads as a list: items get a little space between them and their wrapped lines hang in. A word
+    /// wider than the width keeps a line to itself; words are never split.
+    func wrap(_ text: String, cap: CGFloat, width: CGFloat) -> [Line] {
+        let paragraphs = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let list = paragraphs.filter { !$0.allSatisfy(\.isWhitespace) }.count > 1, hang = list ? Self.hang : 0
+        var lines: [Line] = []
+        for paragraph in paragraphs {
+            let words = Self.words(paragraph), rows = fill(words, cap: cap, width: width, hang: hang)
+            var even = rows
+            if rows.count > 1 {  // the narrowest width that still needs no more lines
+                var low = words.map { self.width($0, cap: cap) }.max() ?? 0, high = width
+                while high - low > 0.5 {
+                    let mid = (low + high) / 2
+                    if fill(words, cap: cap, width: mid, hang: hang).count <= rows.count { high = mid } else { low = mid }
+                }
+                even = fill(words, cap: cap, width: high, hang: hang)
             }
-            lines.append(line)
+            for (i, row) in even.enumerated() {
+                lines.append(Line(row, above: i == 0 && list && !lines.isEmpty ? Self.itemGap : 0, indent: i > 0 ? hang : 0))
+            }
         }
-        while lines.last?.isEmpty == true { lines.removeLast() }
+        while lines.last?.text.isEmpty == true { lines.removeLast() }
         return lines
+    }
+
+    /// Greedy filling of `words` into rows `width` wide, the rows after the first `hang` capitals narrower.
+    private func fill(_ words: [String], cap: CGFloat, width: CGFloat, hang: CGFloat) -> [String] {
+        var rows: [String] = [], row = ""
+        for word in words {
+            let candidate = row.isEmpty ? word : row + " " + word
+            if row.isEmpty || self.width(candidate, cap: cap) <= width - (rows.isEmpty ? 0 : hang * cap) { row = candidate }
+            else { rows.append(row); row = word }
+        }
+        rows.append(row)
+        return rows
     }
 
     /// A paragraph's words: split at spaces, but not inside a power's brackets, so x^(n + 1) keeps to one line.
@@ -132,24 +168,34 @@ nonisolated struct Handwriting: Sendable {
             if chars[i] == " " { words.append("") } else { words[words.count - 1] += String(chars[i ..< end]) }
             i = end
         }
-        return words.filter { !$0.isEmpty }
+        var kept: [String] = []
+        for word in words where !word.isEmpty {
+            let unit = String(word.reversed().drop { ".,;:!?)".contains($0) }.reversed())
+            if let number = kept.last, number.contains(where: \.isNumber), number.allSatisfy({ $0.isNumber || ".,".contains($0) }), units.contains(unit) {
+                kept[kept.count - 1] += " " + word
+            } else {
+                kept.append(word)
+            }
+        }
+        return kept
     }
 
     /// The ink's bounds, from the first line's capital top-left: tall glyphs reach above y 0, and the last line's
     /// descenders are included. Measured from the written points, so it is tight.
-    func extent(_ lines: [String], cap: CGFloat) -> CGRect {
+    func extent(_ lines: [Line], cap: CGFloat) -> CGRect {
         let points = pen(lines, at: .zero, cap: cap).joined(), xs = points.map(\.x), ys = points.map(\.y)
         guard let x0 = xs.min(), let x1 = xs.max(), let y0 = ys.min(), let y1 = ys.max() else { return .zero }
         return CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
     }
 
-    /// Pen lines for wrapped lines whose first capital top-left is at `origin`: left to right, line by line.
-    func pen(_ lines: [String], at origin: CGPoint, cap: CGFloat) -> [[CGPoint]] {
-        var out: [[CGPoint]] = []
+    /// Pen lines for wrapped lines whose first capital top-left is at `origin`: left to right, line by line, each
+    /// with its own space above and indent.
+    func pen(_ lines: [Line], at origin: CGPoint, cap: CGFloat) -> [[CGPoint]] {
+        var out: [[CGPoint]] = [], baseline = origin.y + cap
         for (i, line) in lines.enumerated() {
-            var x = origin.x
-            let baseline = origin.y + (CGFloat(i) * Self.lineGap + 1) * cap
-            for (g, size, lift) in layout(line) {
+            if i > 0 { baseline += (Self.lineGap + line.above) * cap }
+            var x = origin.x + line.indent * cap
+            for (g, size, lift) in layout(line.text) {
                 let k = cap / 21 * size, y = baseline - lift * cap
                 out += g.lines.map { $0.map { CGPoint(x: x + ($0.x - g.left) * k, y: y + ($0.y - 9) * k) } }
                 x += (g.right - g.left) * k

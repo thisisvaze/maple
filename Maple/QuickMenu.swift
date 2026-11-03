@@ -64,7 +64,9 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
         config.imagePlacement = .top
         config.imagePadding = 6
         config.baseForegroundColor = .label
-        config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
+        config.background.backgroundColor = MapleStyle.fill
+        config.background.cornerRadius = 13
+        config.contentInsets = NSDirectionalEdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12)
         let button = UIButton(configuration: config, primaryAction: UIAction { _ in run() })
         button.accessibilityHint = hint
         return button
@@ -101,8 +103,8 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
             panel.topAnchor.constraint(equalTo: c.view.safeAreaLayoutGuide.topAnchor, constant: 16),
         ])
         panel.alpha = 0
-        panel.transform = CGAffineTransform(translationX: 0, y: -12)
-        UIView.animate(springDuration: 0.3, bounce: 0.15) {
+        panel.transform = UIAccessibility.isReduceMotionEnabled ? .identity : CGAffineTransform(translationX: 0, y: -7)
+        MapleStyle.animate(0.32) {
             self.panel.alpha = 1
             self.panel.transform = .identity
         }
@@ -111,7 +113,7 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
 
     func close() {
         shade.removeFromSuperview()
-        UIView.animate(withDuration: 0.15) { self.panel.alpha = 0 } completion: { _ in
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.18) { self.panel.alpha = 0 } completion: { _ in
             if self.panel.alpha == 0 { self.panel.removeFromSuperview() }
         }
     }

@@ -50,6 +50,14 @@ struct Check {
         memory.written(["Vegetarian"], page: "me")
         precondition(memory.active.filter { $0.author == "you" }.map(\.id) == [theirs.id], "rubbed out")
 
+        // Stored text is capped at 200 characters; rereading the same long line keeps its identity and log.
+        var longMemory = Memory()
+        let longLine = String(repeating: "a", count: 201)
+        longMemory.written([longLine], page: "me")
+        let firstRead = longMemory
+        longMemory.written([" \(longLine)\n"], page: "me")
+        precondition(longMemory == firstRead, "an unchanged long line is not removed and added again")
+
         // Memory stops growing, the log is bounded, and it all saves.
         for n in 0..<60 { _ = memory.propose([P(text: "Unique thing \(n * 7919) zebra\(n)", because: "nurse")], forgetting: [], evidence: said, page: "p7") }
         precondition(memory.active.count == Memory.most && memory.log.last?.why == "memory is full", "full: \(memory.active.count)")

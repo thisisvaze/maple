@@ -97,7 +97,21 @@ nonisolated struct Figure: Codable, Equatable, Sendable {
             let d = p - centre, n = Self.length(d)
             return place(p + (n > 0 ? d / n : XY(0, 1)) * gap / scale)
         }
-        var out: [[CGPoint]] = []
+        var out: [[CGPoint]] = [], taken: [CGRect] = []
+        // A label beside `p`, pushed further out until it clears the labels already written: collinear lengths, like a
+        // wall and the units along it, share a side and nearly a midpoint.
+        // ponytail: stacks clashing labels outward without leader lines; add leaders if stacked labels get ambiguous.
+        func label(_ words: String, beside p: XY, gap: Double, degree: Bool) -> [[CGPoint]] {
+            var gap = gap, at = away(p, gap)
+            for _ in 0..<4 {
+                let width = font.width(words, height: text) + (degree ? text * 0.6 : 0)
+                let room = CGRect(x: at.x - width / 2, y: at.y - text / 2, width: width, height: text).insetBy(dx: -text * 0.25, dy: -text * 0.2)
+                if !taken.contains(where: { $0.intersects(room) }) { taken.append(room); break }
+                gap += text * 1.35
+                at = away(p, gap)
+            }
+            return Self.write(words, at: at, height: text, degree: degree, font: font)
+        }
         for line in lines.prefix(64) where line.count > 1 {
             for (a, b) in zip(line, line.dropFirst()) { out.append([place(try Self.point(a, at)), place(try Self.point(b, at))]) }
         }
@@ -115,15 +129,18 @@ nonisolated struct Figure: Codable, Equatable, Sendable {
             } else {
                 out.append((0...24).map { place(ray(turn * Double($0) / 24, reach)) })
             }
-            out += Self.write(String(format: "%.4g", degrees), at: place(ray(turn / 2, reach + 1.3 * text / scale)), height: text, degree: true, font: font)
+            let words = String(format: "%.4g", degrees), at = place(ray(turn / 2, reach + 1.3 * text / scale))
+            let width = font.width(words, height: text) + text * 0.6
+            taken.append(CGRect(x: at.x - width / 2, y: at.y - text / 2, width: width, height: text))
+            out += Self.write(words, at: at, height: text, degree: true, font: font)
         }
         for length in lengths {
             let a = try Self.point(length.from, at), b = try Self.point(length.to, at)
             let words = [String(format: "%.4g", try Self.measure(length, at)), length.unit].filter { !$0.isEmpty }.joined(separator: " ")
-            out += Self.write(words, at: away((a + b) / 2, text * 1.2), height: text, degree: false, font: font)
+            out += label(words, beside: (a + b) / 2, gap: text * 1.2, degree: false)
         }
         for point in points where point.label {
-            out += Self.write(point.name, at: away(try Self.point(point.name, at), text * 1.1), height: text, degree: false, font: font)
+            out += label(point.name, beside: try Self.point(point.name, at), gap: text * 1.1, degree: false)
         }
         return out
     }
