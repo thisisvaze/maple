@@ -57,10 +57,16 @@ enum Export {
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             stroke.ink.color.getRed(&r, green: &g, blue: &b, alpha: &a)
             let colour = String(format: "#%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
-            let size = stroke.path.first?.size.width ?? 3, width = max(2 * (size - 2), 0.5)  // how thick PencilKit draws a point of this size
+            // How thick PencilKit draws a stroke's middle point size: a pencil about 1.95 × size − 0.95, a pen 2 × (size − 2).
+            // Maple's pencil presses and lifts point by point, so its middle size and mean opacity stand for the stroke.
+            let sizes = stroke.path.map(\.size.width).sorted(), size = sizes.isEmpty ? 3 : sizes[sizes.count / 2]
+            let width = max(stroke.ink.inkType == .pencil ? 1.95 * size - 0.95 : 2 * (size - 2), 0.5)
+            // A pencil's opacity builds up as PencilKit stamps along it, so export the tone it shows; a pen ignores opacity.
+            let mean = stroke.path.isEmpty ? 1 : stroke.path.reduce(0) { $0 + $1.opacity } / CGFloat(stroke.path.count)
+            let opacity = a * (stroke.ink.inkType == .pencil ? AgentPen.shown(opacity: mean, size: size) : 1)
             for line in lines(stroke, tolerance: 0.25) where line.count > 1 {
                 let d = "M" + line.map { "\(f($0.x)) \(f($0.y))" }.joined(separator: "L")
-                out.append("<path d=\"\(d)\" fill=\"none\" stroke=\"\(colour)\"\(a < 1 ? String(format: " stroke-opacity=\"%.2f\"", Double(a)) : "") stroke-width=\"\(f(width))\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>")
+                out.append("<path d=\"\(d)\" fill=\"none\" stroke=\"\(colour)\"\(opacity < 0.995 ? String(format: " stroke-opacity=\"%.2f\"", Double(opacity)) : "") stroke-width=\"\(f(width))\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>")
             }
         }
         out.append("</svg>")

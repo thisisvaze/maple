@@ -173,7 +173,7 @@ struct Check {
         let shading = Drawing.hatch(card.map { CGPoint(x: $0[0], y: $0[1]) }, gap: 4, inset: 3)
         precondition(!shading.isEmpty && shading.allSatisfy { $0.count > 2 }, "zig-zags: \(shading.map(\.count))")
         precondition(shading.joined().allSatisfy { CGRect(x: 23, y: 23, width: 194, height: 94).insetBy(dx: -0.01, dy: -0.01).contains($0) }, "inside the line")
-        func coloured(_ fill: String?) throws -> [(line: [CGPoint], cap: CGFloat?, fill: String?)] {
+        func coloured(_ fill: String?) throws -> [Drawing.Ink] {
             let sketch = Drawing(reading: "a card", kind: "ink", say: "", parts: [.init(name: "card", strokes: [card, tick], labels: [.init(text: "Hi", x: 40, y: 40, size: 20)], fill: fill)],
                                  plot: .init(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0))
             return try sketch.pen(in: CGSize(width: 240, height: 160), font: font)
@@ -190,6 +190,109 @@ struct Check {
         precondition(plain.fill == nil && Drawing(reading: "", kind: "ink", say: "", parts: [plain], plot: old.plot).scaled(by: 2).parts[0].fill == nil, "old parts")
         precondition(Drawing(reading: "", kind: "ink", say: "", parts: [.init(name: "n", strokes: [card], labels: [], fill: "pink")], plot: old.plot).scaled(by: 2).parts[0].fill == "pink",
                      "a scaled part keeps its colour")
+
+        // In a hand (Drawing.handDrawn). Everything above is style 0, which old saves keep, so they redraw as they were.
+        func hand(_ parts: [Drawing.Part], kind: String = "ink", plot: Drawing.Graph = old.plot, reading: String = "", labeled: Bool = false) -> Drawing {
+            var drawing = Drawing(reading: reading, kind: kind, say: "", parts: parts, plot: plot)
+            drawing.style = Drawing.handDrawn
+            drawing.labeled = labeled
+            return drawing
+        }
+        let paper = CGSize(width: 300, height: 200), card160 = CGSize(width: 240, height: 160)
+        // It lifts at a sharp corner: an L is two lines, the first running 1 to 3 points past the corner and the second
+        // starting just before it. A gentle curve stays one line, and a scribble with corners everywhere draws in one go.
+        let ell = try hand([.init(name: "ell", strokes: [[[20, 20], [120, 20], [120, 100]]], labels: [])]).pen(in: paper, font: font)
+        precondition(ell.count == 2 && ell.allSatisfy { $0.kind == .main }, "an L in two: \(ell.count)")
+        precondition((1 ... 3).contains(ell[0].line.last!.x - 120) && ell[0].line.last!.y == 20, "past the corner: \(ell[0].line)")
+        precondition((0.3 ... 1.2).contains(20 - ell[1].line.first!.y) && ell[1].line.first!.x == 120 && ell[1].line.last! == CGPoint(x: 120, y: 100), "just before it: \(ell[1].line)")
+        let arc = (0 ... 30).map { i -> [Double] in let a = Double(i) / 30 * .pi / 2; return [150 + 60 * cos(a), 40 + 60 * sin(a)] }
+        let curve = try hand([.init(name: "arc", strokes: [arc], labels: [])]).pen(in: paper, font: font)
+        precondition(curve.count == 1 && curve[0].line.count == 31, "a curve stays one line: \(curve.count)")
+        let scribble = (0 ..< 40).map { [Double($0 * 6), $0 % 2 == 0 ? 20.0 : 40] }
+        let scribbled = try hand([.init(name: "z", strokes: [scribble], labels: [])]).pen(in: paper, font: font)
+        precondition(scribbled.count == 1, "a scribble draws in one go")
+        let doubled = try hand([.init(name: "ell", strokes: [[[20, 20], [120, 20], [120, 20], [120, 100]]], labels: [])]).pen(in: paper, font: font)
+        precondition(doubled == ell, "a point given twice still lifts at its corner")
+        // A closed shape with corners is its sides, each crossing the next at the corner; one without, like a circle, is
+        // a single line that runs 6 to 9% past its start and ends just inside.
+        let sides = try hand([.init(name: "card", strokes: [card], labels: [])]).pen(in: card160, font: font)
+        precondition(sides.count == 4 && sides.allSatisfy { $0.line.count == 2 }, "a box is four sides: \(sides.map(\.line.count))")
+        let round = (0 ... 48).map { i -> [Double] in let a = Double(i) / 48 * 2 * .pi; return [150 + 50 * cos(a), 100 + 50 * sin(a)] }
+        let loop = try hand([.init(name: "sun", strokes: [round], labels: [])]).pen(in: paper, font: font)
+        let rounds = Drawing.length(loop[0].line) / (2 * .pi * 50), end = loop[0].line.last!
+        precondition(loop.count == 1 && (1.05 ... 1.1).contains(rounds) && hypot(end.x - 150, end.y - 100) < 49.5, "a circle overlaps its start: \(rounds)")
+        // Edits find unchanged lines by redrawing them, so a part draws the same alone, among others, and every time.
+        let both = hand([.init(name: "ell", strokes: [[[20, 20], [120, 20], [120, 100]]], labels: []), .init(name: "sun", strokes: [round], labels: [])])
+        let (once, again) = (try both.pen(in: paper, font: font), try both.pen(in: paper, font: font))
+        precondition(once == ell + loop && once == again, "the same lines every time")
+        // Weights by role: a plot's axes and a detail part are lighter, and an arrow's head flicks out from its tip, whichever
+        // way its strokes were given.
+        let sinePlot = Drawing.Graph(expression: "sin(x)", xMin: -6.3, xMax: 6.3, yMin: -1.5, yMax: 1.5)
+        let plotted = try hand([], kind: "plot", plot: sinePlot).pen(in: paper, font: font)
+        precondition(plotted.prefix(3).map(\.kind) == [.detail, .detail, .main], "axes lighter than the curve")
+        let pointer = try hand([.init(name: "arrow", strokes: [[[20, 150], [200, 150]], [[190, 144], [200, 150]], [[200, 150], [191, 157]]], labels: [], role: "arrow"),
+                                .init(name: "grid", strokes: [[[20, 20], [20, 120]]], labels: [], role: "detail")]).pen(in: paper, font: font)
+        precondition(pointer.map(\.kind) == [.main, .flick, .flick, .detail], "roles: \(pointer.map(\.kind))")
+        precondition(pointer[1].line.first! == CGPoint(x: 200, y: 150) && pointer[2].line.first! == CGPoint(x: 200, y: 150), "flicks start at the tip")
+        // A bent arrow's shaft stays a main line on both legs, and its head still flicks out from the tip at its end.
+        let elbow = try hand([.init(name: "connector", strokes: [[[20, 40], [200, 40], [200, 100]], [[194, 92], [200, 100]], [[200, 100], [206, 92]]], labels: [], role: "arrow")])
+            .pen(in: paper, font: font)
+        precondition(elbow.map(\.kind) == [.main, .main, .flick, .flick] && elbow[2].line.first! == CGPoint(x: 200, y: 100) && elbow[3].line.first! == CGPoint(x: 200, y: 100),
+                     "a bent arrow: \(elbow.map(\.kind))")
+        // Two arrows in one part each flick their own head from their own tip, and a head drawn as one V flicks both halves.
+        let pair = try hand([.init(name: "arrows", strokes: [[[20, 50], [280, 50]], [[280, 50], [272, 44]], [[20, 150], [100, 150]], [[100, 150], [92, 144]], [[92, 156], [100, 150]]],
+                                   labels: [], role: "arrow")]).pen(in: paper, font: font)
+        precondition(pair.map(\.kind) == [.main, .flick, .main, .flick, .flick] && pair[3].line.first! == CGPoint(x: 100, y: 150) && pair[4].line.first! == CGPoint(x: 100, y: 150),
+                     "two arrows: \(pair.map(\.kind))")
+        let vee = try hand([.init(name: "arrow", strokes: [[[20, 100], [200, 100]], [[190, 94], [200, 100], [190, 106]]], labels: [], role: "arrow")]).pen(in: paper, font: font)
+        precondition(vee.map(\.kind) == [.main, .flick, .flick] && vee.dropFirst().allSatisfy { hypot($0.line[0].x - 200, $0.line[0].y - 100) < 3 }, "a V head: \(vee.map(\.kind))")
+        // Soft colouring: rows of one soft stroke each, under the sides, inside the line, the same every time.
+        let softly = hand([.init(name: "card", strokes: [card], labels: [], fill: "yellow")]), soft = try softly.pen(in: card160, font: font)
+        let rows = soft.filter { $0.kind == .shade }
+        precondition(rows.count > 10 && rows.allSatisfy { $0.line.count == 3 && $0.fill == "yellow" } && soft.suffix(4).allSatisfy { $0.kind == .main }, "soft rows: \(rows.count)")
+        let resoft = try softly.pen(in: card160, font: font)
+        precondition(rows.allSatisfy { $0.line.allSatisfy { CGRect(x: 21, y: 21, width: 198, height: 98).contains($0) } } && resoft == soft, "inside the line")
+        // A part's rows are shared out over its shapes, so five tall bars are all coloured in; and a shape far off the
+        // page, which clamps to the box's edge, still finishes.
+        let bars = (0 ..< 5).map { i -> [[Double]] in let x = 40 + Double(i) * 100; return [[x, 50], [x + 40, 50], [x + 40, 350], [x, 350], [x, 50]] }
+        let barred = try hand([.init(name: "bars", strokes: bars, labels: [], fill: "green")]).pen(in: CGSize(width: 600, height: 400), font: font).filter { $0.kind == .shade }
+        let perBar = (0 ..< 5).map { i in barred.filter { $0.line[1].x >= 40 + CGFloat(i) * 100 && $0.line[1].x <= 80 + CGFloat(i) * 100 }.count }
+        precondition(perBar.allSatisfy { $0 > 20 }, "every bar coloured in: \(perBar)")
+        // Ten tall bars in one part: rows stay at their usual spacing, since they're nowhere near the ink a part may take.
+        let chart = (0 ..< 10).map { i -> [[Double]] in let x = 20 + Double(i) * 66; return [[x, 50], [x + 40, 50], [x + 40, 450], [x, 450], [x, 50]] }
+        let charted = try hand([.init(name: "bars", strokes: chart, labels: [], fill: "blue")]).pen(in: CGSize(width: 700, height: 500), font: font).filter { $0.kind == .shade }
+        precondition(charted.count > 10 * 70, "a bar chart isn't striped: \(charted.count) rows")
+        let far = [[1e17, 1e17], [1e17 + 400, 1e17], [1e17 + 400, 1e17 + 400], [1e17, 1e17 + 400], [1e17, 1e17]]
+        _ = try hand([.init(name: "far", strokes: [far], labels: [], fill: "yellow")]).pen(in: paper, font: font)
+        // The caps count the model's strokes, not the pieces a hand cuts them into.
+        let corners = (0 ..< 3).map { Drawing.Part(name: "p\($0)", strokes: Array(repeating: [[0, 0], [10, 0], [10, 10]], count: 100), labels: []) }
+        let pieces = try hand(corners).lines(in: box, font: font)
+        precondition(pieces.count == 512, "256 strokes, two pieces each: \(pieces.count)")
+        // Under the person's label, the graph's title and a title of the drawing's own that only repeat it are left out,
+        // once, as the drawing comes back; a button's words stay, and so does everything under another label or none.
+        func letters(_ drawing: Drawing) throws -> Int { try drawing.pen(in: paper, font: font).filter { $0.kind == .letter }.count }
+        let title = font.lines("y = sin(x)", at: .zero, height: 10).count, email = font.lines("Email", at: .zero, height: 10).count
+        let titled = try letters(hand([], kind: "plot", plot: sinePlot)), repeated = try letters(hand([], kind: "plot", plot: sinePlot, reading: "y = sin x", labeled: true))
+        let other = try letters(hand([], kind: "plot", plot: sinePlot, reading: "profit", labeled: true))
+        precondition(repeated == titled - title && other == titled, "no repeated title: \(titled) \(repeated) \(other)")
+        let named = [Drawing.Label(text: "Login Screen", x: 10, y: 10, size: 10), .init(text: "Email", x: 10, y: 40, size: 10)]
+        let under = try letters(hand([.init(name: "title", strokes: [], labels: named)], reading: "login screen", labeled: true).untitled())
+        let unlabeled = try letters(hand([.init(name: "title", strokes: [], labels: named)], reading: "login screen").untitled())
+        precondition(under == email && unlabeled > email, "the label isn't written again, unless the box has none: \(under) \(unlabeled)")
+        let signIn = Drawing.Part(name: "sign in button", strokes: [card], labels: [.init(text: "Sign in", x: 60, y: 60, size: 12)])
+        precondition(hand([signIn], reading: "sign in", labeled: true).untitled().parts[0].labels.count == 1, "a button keeps its words")
+        let heading = Drawing.Part(name: "heading", strokes: [], labels: [.init(text: "Settings", x: 20, y: 20, size: 14)])
+        precondition(hand([heading, signIn], reading: "Settings", labeled: true).untitled().parts[0].labels.count == 1, "a screen's heading keeps its words")
+        let cycle = Drawing.Part(name: "title", strokes: [], labels: [.init(text: "Water Cycle", x: 20, y: 20, size: 14)])
+        precondition(hand([cycle, signIn], reading: "The water cycles", labeled: true).untitled().parts[0].labels.isEmpty, "a title repeats the label whatever its small words and plurals")
+        let only = hand([.init(name: "title", strokes: [], labels: [.init(text: "Sun", x: 10, y: 10, size: 12)])], reading: "sun", labeled: true)
+        precondition(only.untitled() == only, "nothing goes if it would leave the drawing empty")
+        // Style, label and roles save, read back, survive scaling, and an old save reads as style 0 with no roles.
+        let kept = hand([.init(name: "a", strokes: [], labels: [], role: "detail")], labeled: true)
+        let reloaded = try JSONDecoder().decode(Drawing.self, from: try JSONEncoder().encode(kept))
+        precondition(reloaded == kept && reloaded.style == Drawing.handDrawn && reloaded.labeled && reloaded.parts[0].role == "detail", "saves and reads back")
+        precondition(old.style == 0 && !old.labeled && plain.role == nil, "an old save reads as before")
+        precondition(kept.scaled(by: 2).parts[0].role == "detail" && kept.scaled(by: 2).style == Drawing.handDrawn && kept.scaled(by: 2).labeled, "scaling keeps them")
 
         print("drawing ok")
     }

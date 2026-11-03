@@ -79,6 +79,44 @@ nonisolated enum AgentPen {
     /// Screen points thick for Maple's drawn lines, and the most its writing gets.
     static let hand: CGFloat = 2.6  // calibration knob: the pencil's grain reads lighter than a pen line this thick
     static let shade: CGFloat = 1.3  // calibration knob: screen points thick for colouring in, light enough that labels read over it in dark mode too
+    // Drawings in a hand (Drawing.handDrawn), in screen points: a lighter line for axes, guides and inner details, and
+    // colouring in with the side of the pencil, at a low opacity, since PencilKit's pencil takes no tilt or force from
+    // made-up points, only size and opacity (probed on the iOS 26.5 simulator, 3 Nov).
+    static let fine: CGFloat = 1.5  // calibration knob
+    static let soft: CGFloat = 5.2  // calibration knob: under Written.reveal's 7.4-point trail, as unbowed colouring is
+    static let softTone: CGFloat = 0.34  // calibration knob: how strongly colouring in shows, a light wash labels read over
+
+    /// PencilKit's pencil stamps a point's texture over and over along a line, so a point's opacity builds up: about
+    /// 2.4 stamps per point of size, so opacity o shows as 1 − (1 − o)^(2.4 × size). Measured on the iOS 26.5 simulator,
+    /// 3 Nov: o 0.3 at size 3.15 shows 0.93, o 0.1 shows 0.56, and o 0.3 at size 1.82 shows 0.80.
+    static let stamps: CGFloat = 2.4  // calibration knob
+    static func shown(opacity: CGFloat, size: CGFloat) -> CGFloat { 1 - pow(1 - min(max(opacity, 0), 1), stamps * max(size, 0.1)) }
+    /// The opacity that shows as `tone` at point `size`, so a line's tone doesn't change with the zoom it's drawn at.
+    static func opacity(showing tone: CGFloat, size: CGFloat) -> CGFloat { 1 - pow(1 - min(max(tone, 0), 0.999), 1 / (stamps * max(size, 0.1))) }
+
+    /// Maple writes answers in a fine blue pen, smooth so a line of writing reads calmly, with the same taper. PencilKit
+    /// draws a pen point about 2 × (size − 2) points wide, nothing at a size under 2, and ignores opacity (probed on the
+    /// iOS 26.5 simulator, 3 Nov), so pen sizes keep to 2.2 and up.
+    static let pen = PKInk(.pen, color: blue)
+    static let penShare: CGFloat = 0.62  // calibration knob: a pen line this share of the pencil's width weighs the same (1.6 at a 24-point capital)
+    enum Nib: Sendable { case pencil, pen }
+
+    /// How a hand presses along a drawn line: it sets down light, presses through and lifts quickly; a flick starts firm
+    /// and is gone by its end; colouring in stays soft, easing in and out.
+    enum Press: Sendable { case hand, flick, shade }
+
+    /// How hard `press` presses `s` screen points into a stroke `length` long, from 0 to 1.
+    static func pressure(_ press: Press, at s: CGFloat, of length: CGFloat) -> CGFloat {
+        func ease(_ x: CGFloat) -> CGFloat { let x = min(max(x, 0), 1); return x * (2 - x) }
+        switch press {
+        case .hand:
+            guard length >= 8 else { return 1 }  // a dot or a short tick keeps its full weight
+            let firm = (0.35 + 0.65 * ease(s / 6)) * (0.3 + 0.7 * ease((length - s) / 4.5))
+            return length > 90 ? firm * (1 - 0.1 * pow(sin(.pi * s / length), 2)) : firm  // a long line eases off as it speeds up
+        case .flick: return 1 - 0.8 * pow(min(max(s / max(length, 1), 0), 1), 1.2)
+        case .shade: return 0.55 + 0.45 * ease(min(s, length - s) / 5)
+        }
+    }
 
     /// How thick Maple writes letters whose capitals are `cap` screen points: about an eighth of the capital, so a small
     /// label stays open instead of clogging.
@@ -91,10 +129,12 @@ nonisolated enum AgentPen {
     static let bow: CGFloat = 1.4  // calibration knob: screen points a long line may bow off true, so it isn't a ruler's
 
     /// A pencil stroke of Maple's through `points`, `thickness` screen points at the `zoom` it's written at. It sets down
-    /// and lifts a little thinner, as a pencil does; with `wobble`, a drawn line bows and drifts gently off true, its ends
-    /// kept where they are. The same line always wobbles the same way, so redrawing it leaves it as it was.
+    /// and lifts a little thinner, as a pencil does, or with `press`, thins and lightens along the stroke as that hand
+    /// presses; with `wobble`, a drawn line bows and drifts gently off true, its ends kept where they are. The same line
+    /// always draws the same way, so redrawing it leaves it as it was. Pressure changes only size and opacity, never where
+    /// a point is.
     static func write(_ points: [CGPoint], zoom: CGFloat, thickness: CGFloat = hand, wobble: Bool = false, colour: UIColor = blue,
-                      date: Date = Date()) -> PKStroke {
+                      press: Press? = nil, nib: Nib = .pencil, date: Date = Date()) -> PKStroke {
         var dense = filled(points, every: 2 / zoom), along: [CGFloat] = [0]  // screen points from the start
         for (a, b) in zip(dense, dense.dropFirst()) { along.append(along[along.count - 1] + hypot(b.x - a.x, b.y - a.y) * zoom) }
         let length = along[along.count - 1], size = pencilSize(thickness, at: zoom)
@@ -102,10 +142,24 @@ nonisolated enum AgentPen {
         let samples = dense.indices.map { i in
             // A dot or a short tick keeps its full width; a longer stroke tapers over its first 3 and last 5 screen points.
             let taper = length < 8 ? 1 : 0.65 + 0.35 * min(1, along[i] / 3, (length - along[i]) / 5)
-            return PKStrokePoint(location: dense[i], timeOffset: Double(i) * 0.002, size: CGSize(width: size * taper, height: size * taper),
-                                 opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+            var point = size * taper, opacity: CGFloat = 1
+            if nib == .pen {
+                // ponytail: the 2.2 floor is 0.4 page points, so above about 4× zoom answers write a little heavier and
+                // lose their taper; probe how thin PencilKit's pen still draws before lowering it.
+                point = max(2.2, 2 + thickness * penShare * taper / zoom / 2)
+            } else if let press {  // in width, before the size it takes, so a light end never thins to nothing
+                let p = pressure(press, at: along[i], of: length)
+                point = pencilSize(thickness * (0.5 + 0.5 * p), at: zoom)
+                // Colouring is set by the tone it shows, its opacity building up as the size goes up; a line lightens as it lifts.
+                // ponytail: a line's lift shows more zoomed in than out, since its opacity isn't set by tone; the stamp
+                // model is only measured for light tones, so set lines by it once it's measured near full.
+                opacity = press == .shade ? Self.opacity(showing: softTone * (0.6 + 0.4 * p), size: point) : 0.45 + 0.55 * p
+            }
+            return PKStrokePoint(location: dense[i], timeOffset: Double(i) * 0.002, size: CGSize(width: point, height: point),
+                                 opacity: opacity, force: 1, azimuth: 0, altitude: .pi / 2)
         }
-        return PKStroke(ink: colour == blue ? pencil : PKInk(.pencil, color: colour), path: PKStrokePath(controlPoints: samples, creationDate: date))
+        let ink = nib == .pen ? (colour == blue ? pen : PKInk(.pen, color: colour)) : (colour == blue ? pencil : PKInk(.pencil, color: colour))
+        return PKStroke(ink: ink, path: PKStrokePath(controlPoints: samples, creationDate: date))
     }
 
     /// `points` moved off their line along its normal: one gentle bow over the whole stroke and a slow drift, both nothing

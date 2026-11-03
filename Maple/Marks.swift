@@ -614,7 +614,7 @@ final class Marks {
         for (i, line) in lines.enumerated() {
             guard let text = pen.writable(line.text) else { continue }
             let wrapped = pen.wrap(text, cap: Self.meCap, width: Self.meWidth), origin = CGPoint(x: Self.meStart.x, y: y), date = base + Double(i) / 1000
-            change.add += pen.pen(wrapped, at: origin, cap: Self.meCap).map { AgentPen.write($0, zoom: 1, thickness: AgentPen.thickness(cap: Self.meCap), date: date) }
+            change.add += pen.pen(wrapped, at: origin, cap: Self.meCap).map { AgentPen.write($0, zoom: 1, thickness: AgentPen.thickness(cap: Self.meCap), nib: .pen, date: date) }
             var note = Note(mark: "memory", trigger: [], anchor: origin, zoom: 1, reading: "", reply: text, turn: 0,
                             rect: pen.extent(wrapped, cap: Self.meCap).offsetBy(dx: origin.x, dy: origin.y), inked: date)
             note.memory = line.id
@@ -700,8 +700,9 @@ final class Marks {
         let lines = pen.wrap(text, cap: place.cap, width: place.width)
         let glyphs = pen.pen(lines, at: place.origin, cap: place.cap)  // reading frame
         let reading = CGAffineTransform(rotationAngle: place.angle), page = reading.inverted(), letters = AgentPen.thickness(cap: place.cap * zoom)
-        let strokes = place.leader.map { AgentPen.write($0, zoom: zoom, wobble: true, date: date) }
-            + glyphs.map { AgentPen.write($0.map { $0.applying(page) }, zoom: zoom, thickness: letters, date: date) }
+        // Answers are written in Maple's fine pen; drawings stay in its pencil.
+        let strokes = place.leader.map { AgentPen.write($0, zoom: zoom, wobble: true, nib: .pen, date: date) }
+            + glyphs.map { AgentPen.write($0.map { $0.applying(page) }, zoom: zoom, thickness: letters, nib: .pen, date: date) }
         logger.notice("wrote kind=\(place.kind.rawValue, privacy: .public) lines=\(lines.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
         var note = note
         note.anchor = place.rect.origin.applying(page)
@@ -841,9 +842,12 @@ final class Marks {
         let start = ContinuousClock.now
         let anchor = Self.anchor(box, zoom).applying(CGAffineTransform(rotationAngle: -turn))
         do {
-            let drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, request: request, memory: memory)
+            var drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, request: request, memory: memory)
             guard active else { return }
             guard present(trigger) else { return done() }
+            // A box the person drew sits under their label; one Maple framed for a spoken request is its own ink and has none.
+            drawing.labeled = !canvas.drawing.strokes.contains { trigger.contains(Self.id($0)) && AgentPen.wrote($0) }
+            drawing = drawing.untitled()
             if drawing.kind == "ask" {
                 guard asked == nil, !drawing.question.isEmpty else { throw Plot.Failure("Muse asked again") }
                 done()
@@ -978,17 +982,30 @@ final class Marks {
     }
 
     /// `drawn`, with each stroke's line in the box's reading frame, in drawing order, for drawing it in. Drawn lines bow a
-    /// little like a hand's; labels are written finer the smaller they are.
+    /// little like a hand's; labels are written finer the smaller they are. In a hand (Drawing.handDrawn), lines press
+    /// and lift, details and axes are lighter, arrowheads flick, colouring in is soft, and a small box draws lighter.
     static func inked(_ drawing: Drawing, in box: CGRect, turn: CGFloat, zoom: CGFloat, date: Date) throws -> (strokes: [PKStroke], lines: [[CGPoint]]) {
         let pen = try drawing.pen(in: box.size, zoom: zoom)
         // Bound the filled-in points too: a few huge strokes must not become millions of PencilKit samples.
-        let length = pen.reduce(CGFloat(0)) { sum, line in sum + zip(line.line, line.line.dropFirst()).reduce(0) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) } }
+        let length = pen.reduce(CGFloat(0)) { $0 + Drawing.length($1.line) }
         guard length * zoom / 2 < 100_000 else { throw Plot.Failure("The drawing is too complex") }
         let page = CGAffineTransform(rotationAngle: -turn)
         let lines = pen.map { $0.line.map { CGPoint(x: box.minX + $0.x, y: box.minY + $0.y) } }
-        let strokes = zip(lines, pen).map { line, drawn in
-            AgentPen.write(line.map { $0.applying(page) }, zoom: zoom, thickness: drawn.cap.map { AgentPen.thickness(cap: $0 * zoom) } ?? (drawn.fill == nil ? AgentPen.hand : AgentPen.shade),
-                           wobble: drawn.cap == nil && drawn.fill == nil, colour: drawn.fill.flatMap { AgentPen.fills[$0] } ?? AgentPen.blue, date: date)
+        // calibration knob: a hand's weights are for a box about 280 screen points across, and go down to 72% in a small one.
+        let inHand = drawing.style >= Drawing.handDrawn, weight = min(1, max(0.72, min(box.width, box.height) * zoom / 280))
+        let strokes = zip(lines, pen).map { line, ink in
+            let thickness: CGFloat, press: AgentPen.Press?
+            switch (inHand, ink.kind) {
+            case (_, .letter): (thickness, press) = (AgentPen.thickness(cap: (ink.cap ?? 10) * zoom), nil)
+            case (false, .shade): (thickness, press) = (AgentPen.shade, nil)
+            case (false, _): (thickness, press) = (AgentPen.hand, nil)
+            case (true, .shade): (thickness, press) = (AgentPen.soft, .shade)
+            case (true, .detail): (thickness, press) = (AgentPen.fine * weight, .hand)
+            case (true, .flick): (thickness, press) = (AgentPen.hand * weight, .flick)
+            case (true, .main): (thickness, press) = (AgentPen.hand * weight, .hand)
+            }
+            return AgentPen.write(line.map { $0.applying(page) }, zoom: zoom, thickness: thickness, wobble: ink.cap == nil && ink.fill == nil,
+                                  colour: ink.fill.flatMap { AgentPen.fills[$0] } ?? AgentPen.blue, press: press, date: date)
         }
         return (strokes, lines)
     }
@@ -1001,6 +1018,10 @@ final class Marks {
         canvas.addSubview(view)
         view.place(zoom: canvas.zoomScale)
         drawingIn.append(view)
+        // Colouring sits under the lines but goes in after them, as a hand colours in what it has drawn: only the order
+        // the trail runs in changes, never the strokes stacked in the picture.
+        let fills = AgentPen.fills.values.map(AgentPen.rgb), coloured = strokes.map { AgentPen.inked($0, in: fills) }
+        let lines = coloured.count == lines.count ? lines.indices.filter { !coloured[$0] }.map { lines[$0] } + lines.indices.filter { coloured[$0] }.map { lines[$0] } : lines
         let length = lines.reduce(CGFloat(0)) { sum, line in sum + zip(line, line.dropFirst()).reduce(0) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) } }
         view.reveal(strokes, along: lines, duration: Double(min(max(length * note.zoom / Written.drawingSpeed, 1), 3))) { [weak self, weak view] in
             view?.removeFromSuperview()
