@@ -24,6 +24,11 @@ struct Check {
         precondition(Grouping.doubleDot([tap1, s("t2", 201, 201, 2, 2, 11, 11.02)], reach: 4) == nil, "too slow")
         let tap0 = s("t0", 199, 200, 2, 2, 9.7, 9.72)
         precondition(Grouping.doubleDot([tap0, tap1, tap2], reach: 4) == nil, "an ellipsis")
+        // Less eager: slow taps, a nib bouncing on landing, and dots straight after writing aren't a double dot.
+        precondition(Grouping.doubleDot([tap1, s("t2", 201, 201, 2, 2, 10.35, 10.37)], reach: 4) == nil, "0.33 s apart is too slow")
+        precondition(Grouping.doubleDot([tap1, s("t2", 200, 200, 2, 2, 10.04, 10.05)], reach: 4) == nil, "a bounce")
+        precondition(Grouping.doubleDot([s("w", 150, 195, 46, 20, 9.2, 9.85), tap1, tap2], reach: 4) == nil, "dots right after writing")
+        precondition(Grouping.doubleDot([s("w", 150, 195, 46, 20, 9.2, 9.6), tap1, tap2], reach: 4) == ["t1", "t2"], "taps after a pause")
         print("grouping ok")
     }
 }

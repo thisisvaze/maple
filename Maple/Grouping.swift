@@ -31,14 +31,17 @@ nonisolated enum Grouping {
 
     /// Two taps of the nib in one spot within `gap` seconds: "look here". In a picture two taps look like one dot, so
     /// this is read from timing on the device. `reach` (page points) is how far apart the taps may land; a colon lands
-    /// further apart, and a third quick dot before them makes an ellipsis, not a double dot.
-    static func doubleDot(_ strokes: [Stroke], reach: CGFloat, gap: TimeInterval = 0.4) -> [String]? {
+    /// further apart. Taps under `bounce` apart are one nib landing twice. Taps that start within `settle` of earlier
+    /// ink are part of the writing (an i's dot and a full stop, a colon) or of an ellipsis, not a double dot.
+    // Calibration knobs, set without a real Pencil: tune gap, bounce and settle on the iPad.
+    static func doubleDot(_ strokes: [Stroke], reach: CGFloat, gap: TimeInterval = 0.3, bounce: TimeInterval = 0.05,
+                          settle: TimeInterval = 0.3) -> [String]? {
         func isDot(_ s: Stroke) -> Bool { max(s.bounds.width, s.bounds.height) <= 6 + reach }
         guard strokes.count >= 2 else { return nil }
-        let a = strokes[strokes.count - 2], b = strokes[strokes.count - 1]
-        guard isDot(a), isDot(b), b.started - a.ended <= gap,
+        let a = strokes[strokes.count - 2], b = strokes[strokes.count - 1], between = b.started - a.ended
+        guard isDot(a), isDot(b), between >= bounce, between <= gap,
               hypot(a.bounds.midX - b.bounds.midX, a.bounds.midY - b.bounds.midY) <= reach else { return nil }
-        if strokes.count >= 3, case let c = strokes[strokes.count - 3], isDot(c), a.started - c.ended <= gap { return nil }
+        if strokes.count >= 3, a.started - strokes[strokes.count - 3].ended < settle { return nil }
         return [a.id, b.id]
     }
 }
