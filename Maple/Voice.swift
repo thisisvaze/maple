@@ -57,7 +57,7 @@ import UIKit
         case .idle:
             editMarks = Set(controller?.canvas.drawing.strokes.filter(AgentPen.edit).map(Marks.id) ?? [])
             if !editMarks.isEmpty {
-                guard let batch = controller?.marks.batch(editMarks, together: true) else { return fail(Muse.Failure("Those marks are already being edited. Wait for that edit, then try again.")) }
+                guard let batch = controller?.marks.batch(editMarks, together: true) else { return fail(Muse.Failure("Already changing those marks. Try again in a moment.")) }
                 selection = batch.targets
             } else { selection = [] }
             state = .permission
@@ -65,10 +65,10 @@ import UIKit
                 guard let self else { return }
                 do {
                     try Task.checkCancellation()
-                    guard controller?.marks.agent != nil else { throw Muse.Failure("The Meta API key is missing.") }
+                    guard controller?.marks.agent != nil else { throw Muse.Failure("No Meta API key. Add one in Secrets.xcconfig.") }
                     let allowed = await AVAudioApplication.requestRecordPermission()
                     try Task.checkCancellation()
-                    guard allowed else { throw Muse.Failure("Microphone access is off. Allow it for Maple in iPad Settings to record a question.") }
+                    guard allowed else { throw Muse.Failure("The microphone is off for Maple. Turn it on in Settings.") }
                     let session = AVAudioSession.sharedInstance()
                     try session.setCategory(.record, mode: .default)
                     try session.setActive(true)
@@ -86,7 +86,7 @@ import UIKit
                     self.recorder = recorder
                     recorder.delegate = self
                     recorder.isMeteringEnabled = true
-                    guard recorder.record(forDuration: 60) else { throw Muse.Failure("Couldn't start the microphone. Please try again.") }
+                    guard recorder.record(forDuration: 60) else { throw Muse.Failure("Couldn't start the microphone. Try again.") }
                     state = .recording
                     task = nil
                 } catch {
@@ -160,7 +160,7 @@ import UIKit
     private func fail(_ error: any Error) {
         cancel()
         guard let controller, controller.view.window != nil else { return }
-        let alert = UIAlertController(title: "Couldn't use voice input", message: error.localizedDescription, preferredStyle: .alert)
+        let alert = UIAlertController(title: "Couldn't listen", message: error.localizedDescription, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         controller.present(alert, animated: true)
     }
@@ -169,10 +169,10 @@ import UIKit
         controller?.marks.voiceActive = state != .idle
         controller?.pencilSound?.suspended = [.permission, .recording, .ready].contains(state)
         let (title, mark, hint): (String, MapleButton.Mark, String) = switch state {
-        case .idle: ("Record", .symbol("mic"), "Squeeze and hold Apple Pencil Pro to record a question, or circle Maple drawings with the edit brush and say what to change. Release to send. Or tap here to start and stop.")
+        case .idle: ("Record", .symbol("mic"), "Squeeze and hold Apple Pencil Pro and ask out loud, or circle Maple's drawings with the edit brush and say what to change. Release to send, or tap here to start and stop.")
         case .permission: ("Allow mic", .loading, "Cancel microphone setup.")
-        case .recording: ("Recording", .waveform, "Release the Pencil squeeze or tap here to stop and send your question.")
-        case .ready: ("Release to send", .symbol("arrow.up"), "One-minute limit reached. Release the Pencil squeeze or tap here to send.")
+        case .recording: ("Recording", .waveform, "Release the squeeze, or tap here, to send.")
+        case .ready: ("Release to send", .symbol("arrow.up"), "Time's up. Release the squeeze, or tap here, to send.")
         case .transcribing: ("Transcribing", .loading, "Tap to cancel.")
         case .answering: ("Thinking", .orb, "Tap to cancel.")
         }
@@ -204,7 +204,7 @@ import UIKit
         let url = recorder.url
         Task { @MainActor [weak self] in
             guard let self, recordingURL == url, state == .recording else { return }
-            guard flag else { return fail(Muse.Failure("The recording was interrupted. Please try again.")) }
+            guard flag else { return fail(Muse.Failure("Recording stopped early. Try again.")) }
             if squeezing {
                 // The one-minute cap stops the microphone; only release sends a held recording.
                 deactivateAudio()
@@ -219,7 +219,7 @@ import UIKit
         let url = recorder.url
         Task { @MainActor [weak self] in
             guard let self, recordingURL == url else { return }
-            fail(Muse.Failure("Couldn't save the recording. Please try again."))
+            fail(Muse.Failure("Couldn't save that recording. Try again."))
         }
     }
 }

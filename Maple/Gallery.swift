@@ -75,20 +75,20 @@ struct Gallery: View {
                     }
                 }
             }
-            .alert("Delete selected pages?", isPresented: $confirmingDeletion) {
+            .alert("Delete these pages?", isPresented: $confirmingDeletion) {
                 Button("Delete \(selection?.count ?? 0) \(selection?.count == 1 ? "Page" : "Pages")", role: .destructive) { deleteSelected() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("These pages and their contents will be permanently deleted. This cannot be undone.")
+                Text("This can't be undone.")
             }
-            .alert("Couldn't delete all selected pages", isPresented: Binding(
+            .alert("Some pages couldn't be deleted", isPresented: Binding(
                 get: { deletionError != nil }, set: { if !$0 { deletionError = nil } }
             )) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(deletionError ?? "")
             }
-            .alert("Rename page", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { page in
+            .alert("Rename Page", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { page in
                 TextField("Untitled page", text: $newName)
                 Button("Rename") {
                     if newName != page.title { page.rename(newName) }
@@ -96,7 +96,7 @@ struct Gallery: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
-                Text("Leave it empty to let Maple name it from the ink.")
+                Text("Leave it empty to name it from its ink.")
             }
             // Maple names pages whose ink changed since it last did. This runs again whenever the list changes, so a page
             // is named soon after it closes; a name that fails is tried again then.
@@ -122,9 +122,9 @@ struct Gallery: View {
             NavigationStack {
                 Form {
                     Section {
-                        Toggle("Voice input", isOn: $voiceInput)
+                        Toggle("Ask Out Loud", isOn: $voiceInput)
                     } footer: {
-                        Text("Squeeze and hold Apple Pencil Pro to record a question through the iPad microphone. Release to send it to Meta and get an answer about your page. Recording stops after one minute and waits for release. You can also tap the microphone button to start and stop.")
+                        Text("Squeeze and hold Apple Pencil Pro, ask out loud, and release to send. Your recording goes to Meta to transcribe and answer on your page, up to one minute at a time. You can also tap the microphone button.")
                     }
                 }
                 .navigationTitle("Settings")

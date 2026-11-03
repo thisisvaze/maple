@@ -9,13 +9,13 @@ nonisolated struct Transcribe: Sendable {
         let (data, response) = try await URLSession.shared.data(for: request(wav))
         try Task.checkCancellation()
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else { throw Muse.Failure("Voice transcription failed (HTTP \(status)). Please try again.") }
+        guard status == 200 else { throw Muse.Failure("Couldn't hear that (HTTP \(status)). Try again.") }
         return try Self.text(from: data)
     }
 
     func request(_ wav: Data) throws -> URLRequest {
-        guard !key.isEmpty else { throw Muse.Failure("The Meta API key is missing.") }
-        guard !wav.isEmpty, wav.count < 31_000_000 else { throw Muse.Failure("The recording is empty or too large.") }
+        guard !key.isEmpty else { throw Muse.Failure("No Meta API key. Add one in Secrets.xcconfig.") }
+        guard !wav.isEmpty, wav.count < 31_000_000 else { throw Muse.Failure("That recording is empty or too long.") }
         let boundary = UUID().uuidString
         let settings = #"{"model":"muse-voice-transcribe-1.0","mode":"PUSH_TO_TALK","audioEncoding":"WAV"}"#
         var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"request\"\r\nContent-Type: application/json\r\n\r\n\(settings)\r\n".utf8)
@@ -34,7 +34,7 @@ nonisolated struct Transcribe: Sendable {
     static func text(from data: Data) throws -> String {
         struct Reply: Decodable { var transcript: String }
         let text = try JSONDecoder().decode(Reply.self, from: data).transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { throw Muse.Failure("No speech was heard. Please record your question again.") }
+        guard !text.isEmpty else { throw Muse.Failure("Didn't catch any words. Try again.") }
         return text
     }
 }

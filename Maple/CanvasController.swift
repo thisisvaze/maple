@@ -271,7 +271,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if let loadError {
-            let alert = UIAlertController(title: "Couldn't open this page", message: loadError.localizedDescription + " The saved file has been left untouched.", preferredStyle: .alert)
+            let alert = UIAlertController(title: "Couldn't open this page", message: loadError.localizedDescription + " Your saved page is untouched.", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default))
             present(alert, animated: true)
         }
@@ -323,8 +323,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
             if brushing { canvas.tool = pen }
         }
         voice?.button.isEnabled = enabled
-        aiButton.display(enabled ? "AI on" : "AI off", mark: enabled ? .orb : .symbol("pause.fill"), color: enabled ? MapleStyle.green : .secondaryLabel, filled: enabled)
-        aiButton.accessibilityLabel = "AI assistance"
+        aiButton.display(enabled ? "Maple on" : "Maple off", mark: enabled ? .orb : .symbol("pause.fill"), color: enabled ? MapleStyle.green : .secondaryLabel, filled: enabled)
+        aiButton.accessibilityLabel = "Maple"
         aiButton.accessibilityValue = enabled ? "On" : "Off"
         aiButton.accessibilityHint = enabled ? "Turns off all AI actions and cancels pending requests." : "Turns on AI assistance."
         updateTools()

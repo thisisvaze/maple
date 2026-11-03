@@ -18,7 +18,7 @@ targets:
         CFBundleDisplayName: Maple
         MODEL_API_KEY: $(MODEL_API_KEY)
         TYPESAFE_API_KEY: $(TYPESAFE_API_KEY)
-        NSMicrophoneUsageDescription: Record a spoken question when you squeeze Apple Pencil Pro or tap the microphone. Audio is sent to Meta to transcribe and answer it.
+        NSMicrophoneUsageDescription: Ask out loud by squeezing Apple Pencil Pro or tapping the microphone. Your recording goes to Meta to transcribe and answer it.
         UILaunchScreen: {}
         UIAppFonts: [Handlee-Regular.ttf]
         UIApplicationSceneManifest:

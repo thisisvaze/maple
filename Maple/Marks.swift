@@ -25,7 +25,7 @@ final class Marks {
     static let fading: TimeInterval = 0.5  // seconds edit marks take to fade once read
     static let meCap: CGFloat = 18, meWidth: CGFloat = 560  // the Me page's writing: capital height and line length
     static let meStart = CGPoint(x: Page.sheet / 2 - 280, y: Page.sheet / 2 - 300)
-    static let meWelcome = "This is what I remember about you, on every page. Write anything here for me to keep. Strike out a line and I'll forget it."
+    static let meWelcome = "What I remember about you, on every page. Write anything here for me to keep. Strike a line and I'll forget it."
 
     /// The agent's blue for dots, bubbles and their text: the ink's blue, and in dark mode the colour PencilKit draws it in.
     static let ink = UIColor { $0.userInterfaceStyle == .dark
@@ -479,9 +479,9 @@ final class Marks {
         guard active, let agent, let view = screenView else { throw CancellationError() }
         try Task.checkCancellation()
         if !editMarks.isEmpty {
-            guard present(Array(editMarks)), let batch = batch(editMarks, together: true) else { throw Muse.Failure("The selection changed. Circle it again and repeat the instruction.") }
+            guard present(Array(editMarks)), let batch = batch(editMarks, together: true) else { throw Muse.Failure("The selection changed. Circle it again, then say what to change.") }
             if let selection, selection.count != batch.targets.count || !selection.allSatisfy(batch.targets.contains) {
-                throw Muse.Failure("The selection changed while recording. Circle it again and repeat the instruction.")
+                throw Muse.Failure("The selection changed while you spoke. Circle it again, then say what to change.")
             }
             editing.formUnion(batch.ids)
             await edit(batch, speech: transcript)
@@ -490,7 +490,7 @@ final class Marks {
         }
         let turn = self.turn, reading = CGAffineTransform(rotationAngle: turn)
         let area = screen.reduce(CGRect.null) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
-        guard !area.isEmpty else { throw Muse.Failure("Open a page before asking a question.") }
+        guard !area.isEmpty else { throw Muse.Failure("Open a page first.") }
         let near = CGRect(x: area.midX - area.width / 4, y: area.midY - area.height / 4, width: area.width / 2, height: area.height / 2)
         let threads = notes.filter { area.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
         let (closeUp, around) = await Self.crops(canvas.drawing.transformed(using: reading), near, area)
@@ -499,7 +499,7 @@ final class Marks {
         try Task.checkCancellation()
         guard active else { throw CancellationError() }
         learn(answer, evidence: transcript)
-        guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !answer.boxes.isEmpty else { throw Muse.Failure("The answer was empty. Please try again.") }
+        guard !answer.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !answer.boxes.isEmpty else { throw Muse.Failure("No answer came back. Try again.") }
         let safe = view.safeAreaLayoutGuide.layoutFrame
         let anchor = onPage(CGRect(x: safe.minX + 24, y: safe.minY + 96, width: 0, height: 0))[0]
         var taken: [[CGPoint]] = []  // boxes drawn so far, which the next box and the reply keep clear of
@@ -914,7 +914,7 @@ final class Marks {
         let data: Data
         if drawing.kind == "computed" { data = try await Self.rendered(drawing, size) }
         else {
-            guard let painter else { throw Muse.Failure("The Meta API key is missing") }
+            guard let painter else { throw Muse.Failure("No Meta API key. Add one in Secrets.xcconfig.") }
             data = try await painter.paint(drawing.picture.prompt, ratio: size, search: drawing.picture.search)
         }
         guard active else { throw CancellationError() }
@@ -933,7 +933,7 @@ final class Marks {
             guard let n = Int(edit.target), batch.targets.indices.contains(n - 1) else { continue }
             let note = batch.targets[n - 1]
             if note.source?.kind == "picture", let instruction = edit.repaint?.trimmingCharacters(in: .whitespacesAndNewlines), !instruction.isEmpty {
-                guard let painter else { throw Muse.Failure("The Meta API key is missing") }
+                guard let painter else { throw Muse.Failure("No Meta API key. Add one in Secrets.xcconfig.") }
                 let data = try await painter.repaint(try marked(note, batch), instruction)
                 guard active else { throw CancellationError() }
                 files[note.id] = try page.keep(data, as: "webp")
@@ -1394,7 +1394,7 @@ final class Marks {
         guard !placements.isEmpty else { return }
         for target in batch.targets {
             guard notes.contains(target), target.source.map({ intact($0, strokes(of: target), in: target.rect, zoom: target.zoom) }) ?? true else {
-                throw PlacementFailure(message: "The selection changed. Circle the drawings again and tell me where they should go.")
+                throw PlacementFailure(message: "The selection changed. Circle the drawings again, then say where they go.")
             }
         }
         let moving = batch.targets.filter { placements[$0.id] != nil }
