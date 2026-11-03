@@ -182,6 +182,10 @@ struct Check {
         precondition(kinds.prefix(2) == ["line", "line"] && kinds.dropFirst(2).prefix(shading.count).allSatisfy { $0 == "fill" } && kinds.last == "label", "stacking: \(kinds)")
         let purple = try coloured("purple"), open = try coloured(nil)
         precondition(purple.count == yellow.count - shading.count && open.count == yellow.count - shading.count, "no colouring")
+        let dot = (0...16).map { i -> [Double] in let a = Double(i) / 16 * 2 * .pi; return [120 + 6 * cos(a), 80 + 6 * sin(a)] }
+        let dotted = Drawing(reading: "", kind: "ink", say: "", parts: [.init(name: "dot", strokes: [dot], labels: [], fill: "blue")], plot: .init(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0))
+        let dottedPen = try dotted.pen(in: CGSize(width: 240, height: 160), font: font)
+        precondition(dottedPen.count == 1, "a dot too small to shade stays an outline")
         let plain = try JSONDecoder().decode(Drawing.Part.self, from: Data(#"{"name":"n","strokes":[],"labels":[]}"#.utf8))
         precondition(plain.fill == nil && Drawing(reading: "", kind: "ink", say: "", parts: [plain], plot: old.plot).scaled(by: 2).parts[0].fill == nil, "old parts")
         precondition(Drawing(reading: "", kind: "ink", say: "", parts: [.init(name: "n", strokes: [card], labels: [], fill: "pink")], plot: old.plot).scaled(by: 2).parts[0].fill == "pink",

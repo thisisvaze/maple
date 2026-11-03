@@ -75,7 +75,12 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
             guard let fill = part.fill, Self.fills.contains(fill) else { continue }
             // ponytail: each closed shape is coloured in on its own, so a shape inside another is coloured over twice;
             // colour by even-odd across the part's shapes if drawings need holes.
-            colouring += closed.flatMap { Self.hatch($0, gap: Self.hatchGap / zoom, inset: Self.hatchInset / zoom) }.prefix(200).map { ($0, CGFloat?.none, Optional(fill)) }
+            // A shape too small to shade, like a timeline's dot, stays an outline: colored in, it reads as a scribble.
+            let shaded = closed.filter { shape in
+                let box = shape.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
+                return min(box.width, box.height) * zoom >= Self.smallestShaded
+            }
+            colouring += shaded.flatMap { Self.hatch($0, gap: Self.hatchGap / zoom, inset: Self.hatchInset / zoom) }.prefix(200).map { ($0, CGFloat?.none, Optional(fill)) }
         }
         pen += colouring
         labels += parts.flatMap(\.labels)
@@ -91,6 +96,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
 
     static let hatchGap: CGFloat = 3.4  // calibration knob: screen points between the colouring's strokes
     static let hatchInset: CGFloat = 2.6  // calibration knob: screen points the colouring keeps inside a shape's line
+    static let smallestShaded: CGFloat = 18  // calibration knob: screen points across the smallest shape that gets colored in
 
     /// Whether a drawn line comes back round to where it began, as a box or a circle does.
     static func closes(_ points: [CGPoint]) -> Bool {
