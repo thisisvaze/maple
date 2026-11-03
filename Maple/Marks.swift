@@ -559,7 +559,7 @@ final class Marks {
             self.room(for: CGSize(width: width * $0, height: height * $0), near: fallback, turn: turn, zoom: zoom, avoid: avoid)
         }).first else { return nil }
         let stroke = Self.frame(box, turn: angle, zoom: zoom), id = Self.id(stroke)
-        enqueue {
+        enqueue { [weak self] in
             Change(add: [stroke]) { [weak self] in
                 guard let self else { return }
                 let (marked, near, around, threads) = sight([id], focus: box, turn: angle)

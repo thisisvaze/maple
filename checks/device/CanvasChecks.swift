@@ -3,6 +3,64 @@ import Testing
 @testable import Maple
 
 extension DeviceChecks {
+    @Test func canvasTravelsWithPaper() throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let folder = URL.temporaryDirectory.appending(path: "maple-transition-check-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = Page(url: folder, edited: .now), c = CanvasController(page: Page(url: folder, edited: .now))
+        let host = UIWindow(windowScene: scene)
+        host.addSubview(c.view)
+        c.view.frame = host.bounds
+        c.viewDidLayoutSubviews()
+        c.setAIEnabled(false)
+        defer {
+            c.marks.stop()
+            c.saveTask?.cancel()
+            c.turner.isHidden = true
+            host.isHidden = true
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        c.rotation = 0.37
+        c.show(c.center, zoom: 1.6)
+        let stroke = AgentPen.stroke([CGPoint(x: 65500, y: 65500), CGPoint(x: 65600, y: 65500)], width: 3, step: 2)
+        c.canvas.drawing = PKDrawing(strokes: [stroke])
+        let ink = c.canvas.drawing.dataRepresentation(), center = c.center, transform = c.turner.transform
+        let gestures = c.turner.gestureRecognizers ?? []
+        c.viewIsAppearing(true)
+        #expect(!(c.turner is UIWindow) && c.canvas.isDescendant(of: c.view), "Ink must travel inside the paper during its opening animation.")
+        c.viewDidAppear(true)
+        let opened = try #require(c.turner as? Turner)
+        #expect(opened.windowScene === scene && !opened.isHidden && c.canvas.superview === opened)
+        #expect(c.turner.transform == transform && c.center == center && c.canvas.zoomScale == 1.6)
+        #expect(c.canvas.transform == .identity && c.canvas.drawing.dataRepresentation() == ink)
+        #expect(gestures.allSatisfy { $0.view === opened }, "Navigation stays with the calibrated window.")
+        c.viewWillDisappear(true)
+        #expect(opened.isHidden && !(c.turner is UIWindow) && c.canvas.isDescendant(of: c.view), "Ink must return to the paper before its closing animation.")
+        #expect(c.turner.transform == transform && c.center == center && c.canvas.zoomScale == 1.6)
+        #expect(c.canvas.drawing.dataRepresentation() == ink && gestures.allSatisfy { $0.view === c.turner })
+        #expect(c.canvas.panGestureRecognizer.minimumNumberOfTouches == 2 && c.canvas.panGestureRecognizer.maximumNumberOfTouches == 2)
+    }
+
+    @Test func queuedFrameReleasesOwner() throws {
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 820, height: 1180)), canvas = PKCanvasView()
+        canvas.frame = host.bounds
+        host.addSubview(canvas)
+        host.layoutIfNeeded()
+        let page = Page(url: URL.temporaryDirectory.appending(path: UUID().uuidString), edited: .now)
+        var owner: Marks? = Marks(canvas: canvas, page: page, notes: [])
+        owner?.host = host
+        owner?.agent = Agent(muse: Muse(key: "offline"))
+        owner?.setEnabled(true)
+        owner?.penDown()
+        _ = try #require(owner?.frame(.init(request: "A triangle", width: 200, height: 150), near: CGPoint(x: 200, y: 300), avoid: []))
+        #expect(owner?.pending.count == 1)
+        weak let queued = owner
+        owner = nil
+        #expect(queued == nil, "A queued drawing must not retain its owner while the pen is held down.")
+    }
+
     @Test func erasedFragmentsRecordAndReload() throws {
         let folder = URL.temporaryDirectory.appending(path: "maple-erase-check-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -130,7 +188,7 @@ extension DeviceChecks {
         c.marks.flush()
         #expect(c.canvas.drawing.strokes.count == 1 && c.marks.pending.isEmpty)
         let written = try #require(c.marks.written.first)
-        written.reveal([line], letters: 80)
+        written.reveal([stroke], along: [line], letters: 80)
         #expect(!written.isUserInteractionEnabled)
         pinch.phase = .began
         c.navigationChanged(pinch)

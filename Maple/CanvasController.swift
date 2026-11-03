@@ -61,7 +61,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     /// Turns the page; the canvas inside it stays upright. A PKCanvasView carrying a rotation itself drops ink tiles it
     /// still needs while zooming, so a turned page blinked blank mid-pinch (v1, 27 Oct sim film at 76°: 58 frames lost
     /// the ink with the canvas turned, 5 with a turner, 10 with the page straight).
-    let turner = Turner()
+    var turner = UIView()  // travels with the paper during transitions; a Turner takes over once the page is open
     let pen = PKInkingTool(.pen, color: .graphite, width: penWidth)
     let toolName = StatusLabel()  // names the tool for a moment after a double-tap
     var loadError: (any Error)?
@@ -110,11 +110,10 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         view = UIView()
         view.backgroundColor = .paper  // the paper sits behind a clear canvas, so things can later go between them
         view.clipsToBounds = true
-        turner.controller = self
-        turner.windowLevel = .normal + 1
         turner.backgroundColor = .clear  // the paper is in the app's window, under this one
         turner.isOpaque = false
         turner.addSubview(canvas)
+        view.insertSubview(turner, at: 0)
     }
 
     override func viewDidLoad() {
@@ -260,16 +259,15 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         marks.layout()
     }
 
-    override func viewIsAppearing(_ animated: Bool) {
-        super.viewIsAppearing(animated)
-        turner.windowScene = view.window?.windowScene
-        turner.alpha = 0
-        turner.isHidden = false
-        UIView.animate(withDuration: 0.3) { self.turner.alpha = 1 }  // it can't slide in with the page beneath it
-    }
-
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        if !(turner is Turner), let scene = view.window?.windowScene {
+            let window = Turner(windowScene: scene)
+            window.controller = self
+            window.windowLevel = .normal + 1
+            moveCanvas(to: window)
+            window.isHidden = false
+        }
         if let loadError {
             let alert = UIAlertController(title: "Couldn't open this page", message: loadError.localizedDescription + " Your saved page is untouched.", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default))
@@ -289,12 +287,30 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         voice?.cancel()
         marks.stop()
         saveNow()  // the gallery reads the file next, for the thumbnail
-        UIView.animate(withDuration: 0.2) { self.turner.alpha = 0 }
+        if turner is Turner {
+            let paper = UIView()
+            view.insertSubview(paper, at: 0)
+            moveCanvas(to: paper)
+        }
     }
 
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        turner.isHidden = true
+    /// Keep the real canvas on the paper while it zooms; only a settled page needs its own window for Pencil sampling.
+    func moveCanvas(to surface: UIView) {
+        let previous = turner
+        surface.bounds = previous.bounds
+        surface.center = previous.center
+        surface.transform = previous.transform
+        surface.backgroundColor = .clear
+        surface.isOpaque = false
+        surface.addSubview(canvas)
+        for gesture in previous.gestureRecognizers ?? [] where gesture is UIRotationGestureRecognizer || gesture === quickMenu.swipe {
+            surface.addGestureRecognizer(gesture)
+        }
+        turner = surface
+        previous.isHidden = true
+        previous.removeFromSuperview()
+        canvas.panGestureRecognizer.minimumNumberOfTouches = 2
+        canvas.panGestureRecognizer.maximumNumberOfTouches = 2
     }
 
     func setVoiceEnabled(_ enabled: Bool) {
