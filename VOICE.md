@@ -27,6 +27,8 @@ Humor is light and friendly, in small moments. Never in errors, and never inside
 
 American spelling (color, math, center). Numbers are digits with units (20 cm, 0.2 s). No emoji. Exclamation marks rarely, and never in errors.
 
+Examples use real-looking numbers (28.59, 3.18 m, 17.8 m/s at 41°), not round ones. Messy numbers are where Maple's exact math helps; round ones make it look like a party trick. Check every sum shown.
+
 ## In the app
 
 - **It's just "Maple".** The app never needs the word AI. Maple says "I" only in its own ink and voice (the Me page, its replies). Buttons, settings and errors stay plain.
