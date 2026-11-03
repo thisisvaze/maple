@@ -1,7 +1,8 @@
 import Foundation
 
 /// TypeSafe's Jev takes the first look at every mark: which gesture the newest ink makes, from the close-up, fast and
-/// cheap. Muse is only asked when Jev sees a ? or an empty box. API: POST /v1/systemone, the image as a multipart part.
+/// cheap. Muse is only asked when Jev sees a ? or ??, an = or … ending a line, or an empty box. API: POST /v1/systemone,
+/// the image as a multipart part.
 nonisolated struct Jev: Sendable {
     static let endpoint = URL(string: "https://api.typesafe.ai/v1/systemone")!
     var key: String
@@ -15,6 +16,9 @@ nonisolated struct Jev: Sendable {
 
     static let marks = [
         "question": "A handwritten question mark, alone or ending a sentence. A loosely curved hook and a dot or short dash below it count, even when drawn in separate pauses.",
+        // The red ink is only the second ?: a ?'s dot groups with its own hook, so the first is dark context.
+        "double_question": "A second question mark straight after another one, making ??. The first may be dark ink.",
+        "equals": "An equals sign ending a line, with nothing written after it yet: a blank to fill in.",
         "circle": "A loop around existing words or a drawing.",
         "box": "A rectangle around existing words or a drawing.",
         "frame": "An empty rectangle under a label, waiting to be filled.",
@@ -23,9 +27,9 @@ nonisolated struct Jev: Sendable {
         "strike": "A line crossing words out.",
         "scribble": "Dense scratching-out over ink.",
         "arrow": "A line with an arrowhead.",
-        "dots": "An ellipsis: three dots in a row.",
+        "dots": "An ellipsis: three dots in a row, trailing off after a list, a sequence or a sentence.",
         "check": "A check or tick.",
-        "writing": "Ordinary writing without a question mark at its end.",
+        "writing": "Ordinary writing without a question mark, an equals sign or an ellipsis at its end.",
         "other": "Something else.",
     ]
 

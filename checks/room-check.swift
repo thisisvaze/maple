@@ -139,6 +139,18 @@ struct Check {
         precondition(first.kind == .sameLine && near(first.cap, cap) && first.angle == 0, "\(first)")
         precondition(near(first.origin.x, mark.maxX + 0.6 * cap) && near(first.origin.y, mark.maxY - cap), "\(first.origin)")
 
+        // "75% of 500 g =", the = a blank to fill: the value goes after it at the letters' size, on their baseline, not
+        // at the = sign's own small height and raised bottom.
+        let sentence = write("75% of 500 g ", x: 200, base: base, h: h), equals = write("=", x: sentence.end, base: base, h: h, mark: true)
+        let blank = Room.box(equals.strokes.flatMap(\.points)), letterCap = 0.9 * h  // the median letter is h tall
+        let unsized = place(request(sentence.strokes + equals.strokes))!
+        var trailing = request(sentence.strokes + equals.strokes)
+        trailing.trailing = true
+        let filled = place(trailing)!
+        precondition(unsized.cap < letterCap / 2, "without trailing, the = sets the size: \(unsized)")
+        precondition(filled.kind == .sameLine && near(filled.cap, letterCap) && near(filled.origin.x, blank.maxX + 0.6 * letterCap)
+                     && near(filled.origin.y, base - letterCap), "a blank after = is filled at the letters' size: \(filled)")
+
         // More writing after the ? on that line: under the line from its left edge, 0.5 cap below its band (a descender).
         let more = question + write(" and why", x: q.end, base: base, h: h).strokes, band = Room.box(more.flatMap(\.points))
         let next = place(request(more))!

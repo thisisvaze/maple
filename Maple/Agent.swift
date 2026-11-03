@@ -1,7 +1,8 @@
 import Foundation
 import Synchronization
 
-/// Muse Spark answers the marks Jev picked out: a written ? or a double dot gets an answer, an empty box a drawing. Each
+/// Muse Spark answers the marks Jev picked out: a written ?, an = or … ending a line, or a double dot gets an answer (a ??
+/// gets Muse Wonder's), an empty box a drawing. Each
 /// gets two crops of the page and the earlier answers around it. Marks of the edit brush change drawings and answers.
 nonisolated struct Agent: Sendable {
     let muse: Muse
@@ -107,17 +108,26 @@ nonisolated struct Agent: Sendable {
         var placement: Placement? = nil
     }
 
-    /// `near` is a close-up with the new mark in red; `around` is the working area. `gesture` is "question" or
-    /// "double_dot", or "voice" with a transcript in `speech`. `target` is the earlier answer the mark sits beside, if any.
+    /// What a ?? asks for: the bigger model, given time to think. Calibration knob: raise effort if answers stay shallow.
+    static let deep = (model: "muse-wonder-1.0", effort: Muse.Effort.medium)
+
+    /// `near` is a close-up with the new mark in red; `around` is the working area. `gesture` is "question",
+    /// "double_question", "equals", "dots" or "double_dot", or "voice" with a transcript in `speech`. `target` is the
+    /// earlier answer the mark sits beside, if any.
     func ask(near: Data, around: Data, gesture: String, threads: [Thread], target: String?, speech: String? = nil, memory: [Memory.Line] = []) async throws -> Answer {
         struct Context: Encodable { var gesture: String, target: String?, threads: [Thread], speech: String?, memory: [Memory.Line] }
         let context = String(decoding: try JSONEncoder().encode(Context(gesture: gesture, target: target, threads: threads, speech: speech, memory: memory)), as: UTF8.self)
-        let asked = Asked()
+        let asked = Asked(), deep = gesture == "double_question"
+        var muse = self.muse
+        if deep { muse.model = Self.deep.model }
         let reply = try await muse.respond([.png(near), .png(around), .text(context)], instructions: Self.instructions, schema: Self.schema,
+                                           effort: deep ? Self.deep.effort : .minimal, maxOutputTokens: deep ? 16_000 : 4000,
                                            search: true, functions: gesture == "voice" ? [Self.calculate, Self.drawBox(asked)] : [Self.calculate])
         var answer = try JSONDecoder().decode(Answer.self, from: Data(reply.text.utf8))
         (answer.searched, answer.calculated) = (reply.searched, reply.called.filter { $0 == "calculate" }.count)
         answer.boxes = asked.boxes.withLock { $0 }
+        // Wonder opens with a list marker ("• " or ". ", 3 Nov) even when told not to; a marker needs a space after it, so −1 and .5 stay.
+        if deep { answer.reply = answer.reply.replacing(/^\s*(?:[•·*.\-]\s+)+/, with: "") }
         return answer
     }
 
@@ -203,6 +213,8 @@ nonisolated struct Agent: Sendable {
     The first image is a close-up: red ink is the newest strokes, dark ink is earlier writing. The second image shows the working area around it, not necessarily the whole page. The close-up often cuts off the start of a question, so read the complete expression or sentence from the second image. Check superscripts, fractions, operators and line breaks carefully. If text is cut off or unreadable, say which part instead of inventing it.
 
     The gesture is question when the red ink ends with a handwritten question mark. It is double_dot when the person tapped twice in one spot to say "look here": work out what they want from the ink right around the dots and help, by answering the question there, explaining a term, or checking or continuing the working.
+
+    It is equals when the red ink is an = ending a line with nothing after it: fill in the blank. reply is only the value, with its unit when it has one, like 375 g or 8.314 J/(mol·K): no words, and never the left side again. A symbol or name on its own stands for its best-known value, like R for the gas constant, unless the page around it says otherwise. It is dots when the red ink trails off in three dots after a list, a sequence or a sentence: carry it on in the same pattern, style and separators, about three more items, on one line and never as a checklist. reply is only what comes next, with nothing before it and no dots after it. When prose just trails off for effect, with no list or pattern to carry on, leave reply empty. It is double_question when the red ink is a second question mark straight after another, ??: they want it thought through. Take the time to get it right and say why, not only what, in up to four short plain sentences with no bullets; this reply opens from a dot rather than being written in pen.
 
     For gesture voice, speech is the person's transcribed question. The images show the center and the visible page, with no red mark. Answer the spoken question using that context and earlier answers; set reading to the question you heard. If "this" or "that" is ambiguous, ask which part they mean. Voice answers appear in a bubble. When they ask you to draw, sketch, plot or picture something, call draw_box rather than describing it, and leave reply empty unless they asked something else too.
 

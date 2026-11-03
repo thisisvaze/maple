@@ -15,6 +15,7 @@ nonisolated enum Room {
     struct Request: Sendable {
         var strokes: [Stroke]  // everything on and near the screen
         var doubleDot: Bool  // the mark is two nib taps ("look here"), not a written ?
+        var trailing = false  // the mark is a small sign ending the line, an = or …: the answer takes its letters' size and baseline
         var screen: [CGPoint]  // the screen's four corners in page points, clockwise from top-left
         var avoid: [[CGPoint]]  // page-point polygons in the way: the Pages button, other answers' dots
         var screenAngle: CGFloat  // the page's rotation on screen, radians
@@ -207,7 +208,8 @@ nonisolated enum Room {
         let marked = request.strokes.reduce(CGRect.null) { $1.mark ? $0.union(box($1.points, frame)) : $0 }
         guard !marked.isNull else { return nil }
         let boxes = request.strokes.compactMap { $0.person && !$0.mark ? box($0.points, frame) : nil }.filter { !$0.isNull }
-        var members: [Int] = [], cap = clamp(capFactor * marked.height)
+        // A trailing = or … is shorter than its letters: chain at a usual size, then take theirs.
+        var members: [Int] = [], cap = request.trailing ? clamp(defaultCap / zoom) : clamp(capFactor * marked.height)
         if request.doubleDot {
             // The strokes touching the dots, else the nearest right under them, else the nearest at all, else the dots alone.
             let fallback = clamp(defaultCap / zoom), strip = CGRect(x: marked.minX, y: marked.maxY, width: marked.width, height: under * fallback)
@@ -243,10 +245,11 @@ nonisolated enum Room {
         }
         let mark = request.doubleDot ? band.union(marked) : marked  // a double dot's word stands for its mark
         chain(chainGap)
-        if request.doubleDot, !members.isEmpty { cap = clamp(capFactor * median(members.map { boxes[$0].height })) }
+        let fromLetters = (request.doubleDot || request.trailing) && !members.isEmpty
+        if fromLetters { cap = clamp(capFactor * median(members.map { boxes[$0].height })) }
         let letters = ((request.doubleDot ? [] : [marked]) + members.map { boxes[$0] }).filter { $0.height >= fitHeight * cap }
         let bottoms = letters.map { CGPoint(x: $0.midX, y: $0.maxY) }
-        let baseline = request.doubleDot && !members.isEmpty ? median(members.map { boxes[$0].maxY }) : marked.maxY
+        let baseline = fromLetters ? median(members.map { boxes[$0].maxY }) : marked.maxY
         return Line(mark: mark, band: band, cap: cap, capTop: baseline - cap, bottoms: bottoms, members: members)
     }
 

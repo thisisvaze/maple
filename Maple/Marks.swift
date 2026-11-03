@@ -339,7 +339,7 @@ final class Marks {
         let target = notes.filter { Self.distance(middle, $0) <= reach }.min { Self.distance(middle, $0) < Self.distance(middle, $1) }?.id
         let anchor = Self.anchor(mark, zoom).applying(reading.inverted()), view = (screen: screen, avoid: [pagesCorner])
         // A double dot is known on the device, so its orb shows at once. Anything else, Jev looks at first, and only a ? or
-        // an empty box goes on to Muse.
+        // ??, an = or … ending a line, or an empty box goes on to Muse.
         let thinking = dots == nil ? nil : add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
         run { [self] in
             let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
@@ -364,7 +364,7 @@ final class Marks {
                 if let asked, let box = asked.asked {
                     await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: asked.trigger, box: box.box, turn: box.turn, zoom: asked.zoom, asked: asked, reply: trigger, memory: memory)
                 }
-            case "question":  // the orb shows from the moment Jev sees the ?
+            case "question", "double_question", "equals", "dots":  // the orb shows from the moment Jev sees the mark
                 await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, anchor: anchor,
                           turn: turn, zoom: zoom, view: view, bubble: add(Bubble(anchor: anchor, zoom: zoom, turn: turn)), memory: memory)
             case "double_dot":
@@ -445,9 +445,9 @@ final class Marks {
         bubbles.removeAll { $0 === bubble }
     }
 
-    /// Answers a ? or a double dot in ink beside it, once the pen rests. Exact texts, and answers the pen can't write or
-    /// that find no room, stay a quiet dot to tap open, or for a double dot, opened at once. The dot is the thinking orb
-    /// meanwhile.
+    /// Answers a ?, a double dot, or an = or … ending a line in ink beside it, once the pen rests. A ??'s longer answer,
+    /// exact texts, and answers the pen can't write or that find no room, stay a quiet dot to tap open, or for a double
+    /// dot, opened at once. The dot is the thinking orb meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?, trigger: [String],
              anchor: CGPoint, turn: CGFloat, zoom: CGFloat, view: (screen: [CGPoint], avoid: [[CGPoint]]), bubble: Bubble?, memory: [Memory.Line] = []) async {
         guard active, present(trigger) else { return remove(bubble) }
@@ -461,7 +461,7 @@ final class Marks {
             learn(answer, evidence: answer.reading)
             guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
             let note = Note(mark: gesture, trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading, reply: answer.reply, turn: turn)
-            guard !answer.passage, let text = Handwriting.answers.writable(answer.reply) else { return show(note, bubble: bubble) }
+            guard gesture != "double_question", !answer.passage, let text = Handwriting.answers.writable(answer.reply) else { return show(note, bubble: bubble) }
             enqueue { [weak self] in self?.write(text, note: note, view: view, bubble: bubble) }
         } catch {
             logger.error("ask failed: \(error.localizedDescription, privacy: .public)")
@@ -691,7 +691,7 @@ final class Marks {
              CGPoint(x: dot.frame.maxX, y: dot.frame.maxY), CGPoint(x: dot.frame.minX, y: dot.frame.maxY)].map { CGPoint(x: $0.x / canvas.zoomScale, y: $0.y / canvas.zoomScale) }
         }
         let request = Room.Request(strokes: ink(around: screen, marking: Set(note.trigger), leaving: leaving, zoom: zoom), doubleDot: note.mark == "double_dot",
-                                   screen: screen, avoid: avoid + dots, screenAngle: turn, zoom: zoom, nib: nib)
+                                   trailing: ["equals", "dots"].contains(note.mark), screen: screen, avoid: avoid + dots, screenAngle: turn, zoom: zoom, nib: nib)
         let start = ContinuousClock.now
         guard let place = Room.place(request, layout: { cap, width in
             let lines = pen.wrap(text, cap: cap, width: width)

@@ -49,7 +49,15 @@ struct Check {
         precondition(name == "Water cycle", "name: \(name)")
         let sent = ((MuseStub.bodies.last!["input"] as! [[String: Any]])[0]["content"] as! [[String: Any]]).last!["text"] as! String
         precondition(sent.contains("- x² = 49 ?") && sent.contains("Its current name: Equations"), "name context: \(sent)")
-        print("muse ok: calculate, function-call rounds, last message, search, unknown function, endless calls, page name")
+
+        // A ?? goes to Muse Wonder with time to think; every other mark stays on Spark at minimal effort.
+        for (gesture, model, effort) in [("double_question", "muse-wonder-1.0", "medium"), ("question", "muse-spark-1.3", "minimal"), ("equals", "muse-spark-1.3", "minimal")] {
+            let answer = try await Agent(muse: Muse(key: "answer")).ask(near: Data(), around: Data(), gesture: gesture, threads: [], target: nil)
+            let body = MuseStub.bodies.last!
+            precondition(answer.reply == (gesture == "double_question" ? "375 g" : ". 375 g") && body["model"] as? String == model && (body["reasoning"] as? [String: String])?["effort"] == effort,
+                         "\(gesture) asks \(body["model"] ?? "") at \(body["reasoning"] ?? "")")
+        }
+        print("muse ok: calculate, function-call rounds, last message, search, unknown function, endless calls, page name, ?? to Wonder")
     }
 }
 
@@ -75,6 +83,7 @@ nonisolated final class MuseStub: URLProtocol, @unchecked Sendable {
         case "Bearer search": output = [message("I'll search for the latest result.", commentary: true), #"{"type":"web_search_call","id":"ws_1","status":"completed"}"#, message(#"{"reply": "Kimi Antonelli"}"#)]
         case "Bearer name": output = [message("\"Water cycle.\"\nIt shows evaporation and rain.")]
         case "Bearer unknown": output = answered ? [message(#"{"reply": "done"}"#)] : [call("lookup")]
+        case "Bearer answer": output = [message(#"{"reading": "75% of 500 g =", "confidence": "high", "reply": ". 375 g", "passage": false, "remember": [], "forget": []}"#)]
         default: output = [call("calculate")]
         }
         let json = #"{"status":"completed","output":[\#(output.joined(separator: ","))],"usage":{"output_tokens":10}}"#
