@@ -42,6 +42,7 @@ final class Marks {
     var notes: [Note]
     var bubbles: [Bubble] = []
     var written: [Written] = []  // over answers written in ink
+    var drawingIn: [Written] = []  // over drawings while they draw themselves in
     var pictures: [PictureView] = []  // under the ink
     var grids: [(view: Thinking, box: CGRect, turn: CGFloat)] = []  // over boxes being drawn in
     var waiting: Task<Void, Never>?
@@ -582,8 +583,8 @@ final class Marks {
         let corners = [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY), CGPoint(x: box.maxX, y: box.maxY),
                        CGPoint(x: box.minX, y: box.maxY)].map(off)
         let page = CGAffineTransform(rotationAngle: -turn)
-        return AgentPen.stroke((corners + [corners[0], CGPoint(x: corners[0].x + 8 / zoom, y: corners[0].y)]).map { $0.applying(page) },
-                               width: AgentPen.width(at: zoom), step: 2 / zoom)
+        return AgentPen.write((corners + [corners[0], CGPoint(x: corners[0].x + 8 / zoom, y: corners[0].y)]).map { $0.applying(page) },
+                              zoom: zoom, wobble: true)
     }
 
     /// Takes what the Answer agent asks to remember or forget through Memory's check, against the person's words at this
@@ -613,7 +614,7 @@ final class Marks {
         for (i, line) in lines.enumerated() {
             guard let text = pen.writable(line.text) else { continue }
             let wrapped = pen.wrap(text, cap: Self.meCap, width: Self.meWidth), origin = CGPoint(x: Self.meStart.x, y: y), date = base + Double(i) / 1000
-            change.add += pen.pen(wrapped, at: origin, cap: Self.meCap).map { AgentPen.stroke($0, width: AgentPen.width(at: 1), step: 2, date: date) }
+            change.add += pen.pen(wrapped, at: origin, cap: Self.meCap).map { AgentPen.write($0, zoom: 1, thickness: AgentPen.thickness(cap: Self.meCap), date: date) }
             var note = Note(mark: "memory", trigger: [], anchor: origin, zoom: 1, reading: "", reply: text, turn: 0,
                             rect: pen.extent(wrapped, cap: Self.meCap).offsetBy(dx: origin.x, dy: origin.y), inked: date)
             note.memory = line.id
@@ -674,7 +675,7 @@ final class Marks {
         }
         remove(bubble)
         return Change(add: hand.strokes, notes: [hand.note]) { [weak self] in
-            self?.written.first { $0.note.id == note.id }?.reveal(hand.lines, letters: text.count)
+            self?.written.first { $0.note.id == note.id }?.reveal(hand.strokes, along: hand.lines, letters: text.count)
             UIAccessibility.post(notification: .announcement, argument: note.reply)
         }
     }
@@ -698,10 +699,9 @@ final class Marks {
         }) else { return nil }
         let lines = pen.wrap(text, cap: place.cap, width: place.width)
         let glyphs = pen.pen(lines, at: place.origin, cap: place.cap)  // reading frame
-        let reading = CGAffineTransform(rotationAngle: place.angle), page = reading.inverted()
-        let strokes = (place.leader + glyphs.map { $0.map { $0.applying(page) } }).map {
-            AgentPen.stroke($0, width: AgentPen.width(at: zoom), step: 2 / zoom, date: date)
-        }
+        let reading = CGAffineTransform(rotationAngle: place.angle), page = reading.inverted(), letters = AgentPen.thickness(cap: place.cap * zoom)
+        let strokes = place.leader.map { AgentPen.write($0, zoom: zoom, wobble: true, date: date) }
+            + glyphs.map { AgentPen.write($0.map { $0.applying(page) }, zoom: zoom, thickness: letters, date: date) }
         logger.notice("wrote kind=\(place.kind.rawValue, privacy: .public) lines=\(lines.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
         var note = note
         note.anchor = place.rect.origin.applying(page)
@@ -852,7 +852,7 @@ final class Marks {
             let picture = try await paint(drawing, size: box.size)
             guard active else { return }
             guard present(trigger) else { return done() }
-            let date = Date(), strokes = try Self.drawn(drawing, in: box, turn: turn, zoom: zoom, date: date)
+            let date = Date(), (strokes, lines) = try Self.inked(drawing, in: box, turn: turn, zoom: zoom, date: date)
             logger.notice("drew kind=\(drawing.kind, privacy: .public) strokes=\(strokes.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             var note = Note(mark: "frame", trigger: trigger, anchor: anchor, zoom: zoom,
                             reading: drawing.reading, reply: drawing.say, turn: turn, rect: box, inked: date, source: drawing)
@@ -864,7 +864,10 @@ final class Marks {
                 let question = notes.first { $0.id == asked?.id }
                 return Change(add: strokes, remove: Set((question.map { self.strokes(of: $0) } ?? []).map(Self.id) + reply), notes: [note],
                               dropping: Set([question?.id].compactMap { $0 })) { [weak self] in
-                    guard let view = self?.pictures.first(where: { $0.note.id == id }), !UIAccessibility.isReduceMotionEnabled else { return }
+                    guard let self else { return }
+                    // A picture fades in with its labels on it; ink draws itself in, line by line.
+                    guard let view = pictures.first(where: { $0.note.id == id }) else { return drawIn(note, strokes, along: lines) }
+                    guard !UIAccessibility.isReduceMotionEnabled else { return }
                     view.alpha = 0
                     MapleStyle.animate(0.5) { view.alpha = 1 }
                 }
@@ -971,14 +974,37 @@ final class Marks {
     /// A drawing's pen strokes in `box`, a rect drawn level in the page turned by `turn`, as ink written at `zoom`, all
     /// dated `date`. Throws when it can't be drawn, or is too complex to.
     static func drawn(_ drawing: Drawing, in box: CGRect, turn: CGFloat, zoom: CGFloat, date: Date) throws -> [PKStroke] {
-        let lines = try drawing.lines(in: box.size)
+        try inked(drawing, in: box, turn: turn, zoom: zoom, date: date).strokes
+    }
+
+    /// `drawn`, with each stroke's line in the box's reading frame, in drawing order, for drawing it in. Drawn lines bow a
+    /// little like a hand's; labels are written finer the smaller they are.
+    static func inked(_ drawing: Drawing, in box: CGRect, turn: CGFloat, zoom: CGFloat, date: Date) throws -> (strokes: [PKStroke], lines: [[CGPoint]]) {
+        let pen = try drawing.pen(in: box.size, zoom: zoom)
         // Bound the filled-in points too: a few huge strokes must not become millions of PencilKit samples.
-        let step = 2 / zoom
-        let length = lines.reduce(CGFloat(0)) { sum, line in sum + zip(line, line.dropFirst()).reduce(0) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) } }
-        guard length / step < 100_000 else { throw Plot.Failure("The drawing is too complex") }
+        let length = pen.reduce(CGFloat(0)) { sum, line in sum + zip(line.line, line.line.dropFirst()).reduce(0) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) } }
+        guard length * zoom / 2 < 100_000 else { throw Plot.Failure("The drawing is too complex") }
         let page = CGAffineTransform(rotationAngle: -turn)
-        return lines.map { line in
-            AgentPen.stroke(line.map { CGPoint(x: box.minX + $0.x, y: box.minY + $0.y).applying(page) }, width: AgentPen.width(at: zoom), step: step, date: date)
+        let lines = pen.map { $0.line.map { CGPoint(x: box.minX + $0.x, y: box.minY + $0.y) } }
+        let strokes = zip(lines, pen).map { line, drawn in
+            AgentPen.write(line.map { $0.applying(page) }, zoom: zoom, thickness: drawn.cap.map { AgentPen.thickness(cap: $0 * zoom) } ?? (drawn.fill == nil ? AgentPen.hand : AgentPen.shade),
+                           wobble: drawn.cap == nil && drawn.fill == nil, colour: drawn.fill.flatMap { AgentPen.fills[$0] } ?? AgentPen.blue, date: date)
+        }
+        return (strokes, lines)
+    }
+
+    /// Draws `strokes`, a drawing's ink just put down for `note`, back in along `lines` (see `inked`), at a hand's pace.
+    func drawIn(_ note: Note, _ strokes: [PKStroke], along lines: [[CGPoint]]) {
+        guard !strokes.isEmpty else { return }
+        let view = Written(note: note)
+        view.isAccessibilityElement = false  // the drawing's own note speaks for it
+        canvas.addSubview(view)
+        view.place(zoom: canvas.zoomScale)
+        drawingIn.append(view)
+        let length = lines.reduce(CGFloat(0)) { sum, line in sum + zip(line, line.dropFirst()).reduce(0) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) } }
+        view.reveal(strokes, along: lines, duration: Double(min(max(length * note.zoom / Written.drawingSpeed, 1), 3))) { [weak self, weak view] in
+            view?.removeFromSuperview()
+            self?.drawingIn.removeAll { $0 === view }
         }
     }
 
@@ -1115,7 +1141,7 @@ final class Marks {
             let box = note.picture != nil ? Self.box(note, turn: turn) : ink.reduce(CGRect.null) { $0.union(Self.bounds($1, turn: turn, zoom: zoom)) }
             guard !box.isNull, Self.touches(points, ink.flatMap { Self.points($0, every: reach / 4).joined() }, within: reach)
                 || note.mark == "frame" && points.contains(where: { Self.distance($0, note) == 0 }) || loops.contains(where: { $0.contains(box) }),
-                  note.source.map({ intact($0, ink, in: note.rect) }) ?? true else { return nil }
+                  note.source.map({ intact($0, ink, in: note.rect, zoom: note.zoom) }) ?? true else { return nil }
             return (note, points.map { Self.distance($0, note) }.min() ?? 0)
         }
         let targets = pointed.filter { !editing.contains($0.note.id) }
@@ -1127,9 +1153,9 @@ final class Marks {
     /// Whether a drawing's `ink` is all still on the page. One the person partly erased is theirs, as fade() treats
     /// answers: redrawing it would bring back what they rubbed out.
     // ponytail: all or nothing; track which parts were erased and drop them in the patch if people erase to edit.
-    func intact(_ source: Drawing, _ ink: [PKStroke], in box: CGRect?) -> Bool {
+    func intact(_ source: Drawing, _ ink: [PKStroke], in box: CGRect?, zoom: CGFloat = 1) -> Bool {  // zoom: the note's, which spaces colouring in
         guard let box, !ink.contains(where: { $0.mask != nil }) else { return false }
-        return ink.count == (try? source.lines(in: box.size))?.count
+        return ink.count == (try? source.lines(in: box.size, zoom: zoom))?.count
     }
 
     /// What Muse sees of a batch: a close-up of the marks and their targets, and the screen around it, in the reading
@@ -1224,12 +1250,13 @@ final class Marks {
     func land(_ result: Agent.Edits, _ batch: Batch, pictures: [String: String] = [:], speech: String? = nil, done: @escaping () -> Void = {}) throws {
         let (sources, replies, placements) = try patches(result, batch)
         // A drawing's new version is known now: its box is its own. nil when nothing's left of it, so it goes.
-        var redrawn: [String: (note: Note?, ink: [PKStroke])] = [:]
+        var redrawn: [String: (note: Note?, ink: [PKStroke], fresh: [(stroke: PKStroke, line: [CGPoint])])] = [:]
+        func key(_ line: [CGPoint]) -> String { line.map { "\(Int(($0.x * 100).rounded())),\(Int(($0.y * 100).rounded()))" }.joined(separator: " ") }
         for (n, target) in batch.targets.enumerated() {
             guard var drawing = sources[target.id], let oldBox = target.rect else { continue }
             let box = placements[target.id] ?? oldBox
             drawing = drawing.scaled(by: box.width / oldBox.width)
-            guard !drawing.blank else { redrawn[target.id] = (nil, []); continue }
+            guard !drawing.blank else { redrawn[target.id] = (nil, [], []); continue }
             var note = target
             if placements[target.id] != nil {
                 let own = note.anchor.applying(CGAffineTransform(rotationAngle: note.turn ?? 0)), scale = box.width / oldBox.width
@@ -1238,10 +1265,13 @@ final class Marks {
                 note.rect = box
             }
             let date = Date() + Double(n + 1) / 1000  // its own date
-            let ink = try Self.drawn(drawing, in: box, turn: note.turn ?? 0, zoom: note.zoom, date: date)
+            let (ink, lines) = try Self.inked(drawing, in: box, turn: note.turn ?? 0, zoom: note.zoom, date: date)
+            // What the edit changed draws itself in; what it kept is redrawn exactly as it was, so it just stays.
+            let kept = placements[target.id] == nil ? Set(((try? target.source?.lines(in: oldBox.size, zoom: target.zoom)) ?? []).map(key)) : []
+            let fresh = zip(ink, lines).filter { !kept.contains(key($0.1.map { CGPoint(x: $0.x - box.minX, y: $0.y - box.minY) })) }
             (note.source, note.reply, note.inked) = (drawing, drawing.say, date)
             note.picture = drawing.painted ? pictures[target.id] ?? note.picture : nil
-            redrawn[target.id] = (note, ink)
+            redrawn[target.id] = (note, ink, fresh.map { ($0.0, $0.1) })
         }
         let marks = Set(batch.marks.map(Self.id))
         enqueue { [weak self] in
@@ -1254,7 +1284,8 @@ final class Marks {
                 failed(batch, done: {}, speech: speech, question: error.localizedDescription)
                 return nil
             }
-            var change = Change(remove: marks), reveals: [(id: String, lines: [[CGPoint]], letters: Int)] = [], said: [String] = []
+            var change = Change(remove: marks), reveals: [(id: String, strokes: [PKStroke], lines: [[CGPoint]], letters: Int)] = [], said: [String] = []
+            var drawings: [(note: Note, fresh: [(stroke: PKStroke, line: [CGPoint])])] = []
             let base = Date()
             for (i, target) in batch.targets.enumerated() where redrawn[target.id] != nil || replies[target.id] != nil {
                 let old = strokes(of: target)
@@ -1272,7 +1303,10 @@ final class Marks {
                         change.add += frames.map { var stroke = $0; stroke.transform = stroke.transform.concatenating(move); return stroke }
                         change.remove.formUnion(frames.map(Self.id))
                     }
-                    if let note = redraw.note { change.notes.append(note) }
+                    if let note = redraw.note {
+                        change.notes.append(note)
+                        if note.picture == nil { drawings.append((note, redraw.fresh)) }
+                    }
                     said.append(redraw.note?.reply ?? "Removed \(target.reading)")
                 } else if let reply = replies[target.id] {
                     var note = target
@@ -1287,7 +1321,7 @@ final class Marks {
                                             leaving: Set(old.map(Self.id)).union(marks), date: base + Double(i) / 1000) {
                         note = hand.note
                         change.add += hand.strokes
-                        reveals.append((note.id, hand.lines, text.count))
+                        reveals.append((note.id, hand.strokes, hand.lines, text.count))
                     } else {
                         (note.inked, note.rect) = (nil, nil)  // a quiet dot where it was
                     }
@@ -1301,7 +1335,8 @@ final class Marks {
             change.landed = { [weak self] in
                 guard let self else { return }
                 fadeOut(left)
-                for reveal in reveals { written.first { $0.note.id == reveal.id }?.reveal(reveal.lines, letters: reveal.letters) }
+                for reveal in reveals { written.first { $0.note.id == reveal.id }?.reveal(reveal.strokes, along: reveal.lines, letters: reveal.letters) }
+                for drawing in drawings { drawIn(drawing.note, drawing.fresh.map(\.stroke), along: drawing.fresh.map(\.line)) }
                 for id in pictures.keys {
                     guard let view = self.pictures.first(where: { $0.note.id == id }), !UIAccessibility.isReduceMotionEnabled else { continue }
                     view.alpha = 0
@@ -1358,7 +1393,7 @@ final class Marks {
     func validate(_ placements: [String: CGRect], _ batch: Batch) throws {
         guard !placements.isEmpty else { return }
         for target in batch.targets {
-            guard notes.contains(target), target.source.map({ intact($0, strokes(of: target), in: target.rect) }) ?? true else {
+            guard notes.contains(target), target.source.map({ intact($0, strokes(of: target), in: target.rect, zoom: target.zoom) }) ?? true else {
                 throw PlacementFailure(message: "The selection changed. Circle the drawings again and tell me where they should go.")
             }
         }
@@ -1451,7 +1486,7 @@ final class Marks {
     /// Bubbles sit in the canvas's content, so they scroll with the page by themselves; zoom moves and sizes them.
     func layout() {
         bubbles.forEach { $0.place(zoom: canvas.zoomScale) }
-        written.forEach { $0.place(zoom: canvas.zoomScale) }
+        (written + drawingIn).forEach { $0.place(zoom: canvas.zoomScale) }
         pictures.forEach { $0.place(zoom: canvas.zoomScale) }
         grids.forEach { $0.view.place(over: $0.box, turn: $0.turn, zoom: canvas.zoomScale) }
     }

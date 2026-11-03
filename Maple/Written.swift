@@ -1,10 +1,11 @@
 import PencilKit
 
 /// An answer Maple wrote in ink. The strokes are on the page; this clear view over them reads the answer to VoiceOver,
-/// and when the answer lands, hides the ink under paper and writes it back in with a pen's stroke. The Pencil writes
-/// through it.
+/// and when the answer lands, hides the ink under paper and writes it back in with a pen's stroke. A drawing gets one
+/// for as long as it draws itself in. The Pencil writes through it.
 final class Written: UIView {
     static let perLetter = 0.04  // calibration knob: seconds of writing per letter, within 0.9–2 s
+    static let drawingSpeed: CGFloat = 1400  // calibration knob: screen points of line a second, within 1–3 s a drawing
     let note: Note
     let block: CGRect, turn: CGFloat  // the written block in its reading frame
 
@@ -27,39 +28,53 @@ final class Written: UIView {
         layer.sublayers?.forEach { $0.contentsScale = traitCollection.displayScale * min(max(zoom, 1), 3) }
     }
 
-    /// Writes `lines`, in the block's reading frame, over paper that hides the committed ink, in order and in the colour
-    /// PencilKit draws Maple's blue on this paper. The paper and pen go once the writing is done.
-    func reveal(_ lines: [[CGPoint]], letters: Int) {
-        guard !UIAccessibility.isReduceMotionEnabled else { return }
+    /// Writes an answer of `letters` back in: see `reveal(_:along:duration:)`.
+    func reveal(_ strokes: [PKStroke], along lines: [[CGPoint]], letters: Int) {
+        reveal(strokes, along: lines, duration: min(max(Double(letters) * Self.perLetter, 0.9), 2))
+    }
+
+    /// Writes `strokes`, the committed ink, back in along `lines`, their pen lines in order in the block's reading frame:
+    /// paper along the lines hides the ink, and a picture of that same ink shows through a pen-wide trail that runs along
+    /// them, so what's written in is exactly what stays, grain and all. Both go once the writing is done, then `done`.
+    func reveal(_ strokes: [PKStroke], along lines: [[CGPoint]], duration: Double, done: @escaping () -> Void = {}) {
         let local = CGAffineTransform(translationX: -block.minX, y: -block.minY)
-        let line = AgentPen.thickness / note.zoom  // as thick as AgentPen drew it, at the zoom it wrote at
-        let cover = CAShapeLayer(), pen = CAShapeLayer(), ink = CGMutablePath(), paper = CGMutablePath()
-        for points in lines where points.count > 1 {
-            let path = points.map { $0.applying(local) }
-            ink.addLines(between: path)
-            paper.addRect(path.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -line * 2, dy: -line * 2))
+        let ink = PKDrawing(strokes: strokes).transformed(using: CGAffineTransform(rotationAngle: turn).concatenating(local))
+        let area = ink.bounds.insetBy(dx: -2, dy: -2), trail = CGMutablePath()
+        for points in lines where points.count > 1 { trail.addLines(between: points.map { $0.applying(local) }) }
+        guard !UIAccessibility.isReduceMotionEnabled, !area.isNull, !trail.isEmpty else { return done() }
+        let scale = traitCollection.displayScale * min(max(hypot(transform.a, transform.b), 1), 3)
+        var picture: UIImage?
+        traitCollection.performAsCurrent { picture = ink.image(from: area, scale: scale) }
+        // Wide enough for the pencil, its taper and a drawn line's bow, as written at the zoom it was written at.
+        let width = 2 * (AgentPen.hand / 2 + AgentPen.bow + 1) / note.zoom
+        let cover = CAShapeLayer(), copy = CALayer(), pen = CAShapeLayer()
+        cover.path = trail
+        cover.strokeColor = UIColor.paper.resolvedColor(with: traitCollection).cgColor
+        copy.frame = area
+        copy.contents = picture?.cgImage
+        pen.path = trail
+        pen.strokeColor = UIColor.black.cgColor
+        pen.position = CGPoint(x: -area.minX, y: -area.minY)  // in the copy's own coordinates
+        for shape in [cover, pen] {
+            shape.fillColor = nil
+            shape.lineWidth = width
+            shape.lineCap = .round
+            shape.lineJoin = .round
+            shape.contentsScale = scale
         }
-        cover.path = paper
-        cover.fillColor = UIColor.paper.resolvedColor(with: traitCollection).cgColor
-        pen.path = ink
-        pen.fillColor = nil
-        pen.strokeColor = PKInkingTool.convertColor(AgentPen.blue, from: .light, to: traitCollection.userInterfaceStyle).cgColor
-        pen.lineWidth = line
-        pen.lineCap = .round
-        pen.lineJoin = .round
-        for sub in [cover, pen] {
-            sub.contentsScale = traitCollection.displayScale * min(max(hypot(transform.a, transform.b), 1), 3)
-            layer.addSublayer(sub)
-        }
+        copy.mask = pen
+        layer.addSublayer(cover)
+        layer.addSublayer(copy)
         CATransaction.begin()
-        CATransaction.setCompletionBlock { [weak cover, weak pen] in
+        CATransaction.setCompletionBlock { [weak cover, weak copy] in
             cover?.removeFromSuperlayer()
-            pen?.removeFromSuperlayer()
+            copy?.removeFromSuperlayer()
+            done()
         }
         let writing = CABasicAnimation(keyPath: "strokeEnd")
         writing.fromValue = 0
         writing.toValue = 1
-        writing.duration = min(max(Double(letters) * Self.perLetter, 0.9), 2)
+        writing.duration = duration
         pen.add(writing, forKey: "writing")
         CATransaction.commit()
     }

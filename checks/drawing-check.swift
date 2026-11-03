@@ -166,6 +166,27 @@ struct Check {
         diagram.figure = triangle()
         precondition(diagram.patched(parts: [], plot: diagram.plot, say: "", figure: frame).figure == frame && diagram.patched(parts: [], plot: diagram.plot, say: "").figure == triangle())
 
+        // Colouring in: a part's fill shades its closed shapes inside their line, as zig-zags, after the drawn lines and
+        // under the labels; an open line, an unknown colour and an old part without a fill stay uncoloured.
+        let card = [[20.0, 20], [220, 20], [220, 120], [20, 120], [20, 20]], tick = [[30.0, 140], [90, 150]]
+        precondition(Drawing.closes(card.map { CGPoint(x: $0[0], y: $0[1]) }) && !Drawing.closes(tick.map { CGPoint(x: $0[0], y: $0[1]) }), "closed shapes")
+        let shading = Drawing.hatch(card.map { CGPoint(x: $0[0], y: $0[1]) }, gap: 4, inset: 3)
+        precondition(!shading.isEmpty && shading.allSatisfy { $0.count > 2 }, "zig-zags: \(shading.map(\.count))")
+        precondition(shading.joined().allSatisfy { CGRect(x: 23, y: 23, width: 194, height: 94).insetBy(dx: -0.01, dy: -0.01).contains($0) }, "inside the line")
+        func coloured(_ fill: String?) throws -> [(line: [CGPoint], cap: CGFloat?, fill: String?)] {
+            let sketch = Drawing(reading: "a card", kind: "ink", say: "", parts: [.init(name: "card", strokes: [card, tick], labels: [.init(text: "Hi", x: 40, y: 40, size: 20)], fill: fill)],
+                                 plot: .init(expression: "", xMin: 0, xMax: 0, yMin: 0, yMax: 0))
+            return try sketch.pen(in: CGSize(width: 240, height: 160), font: font)
+        }
+        let yellow = try coloured("yellow"), kinds = yellow.map { $0.cap != nil ? "label" : $0.fill != nil ? "fill" : "line" }
+        precondition(kinds.prefix(2) == ["line", "line"] && kinds.dropFirst(2).prefix(shading.count).allSatisfy { $0 == "fill" } && kinds.last == "label", "stacking: \(kinds)")
+        let purple = try coloured("purple"), open = try coloured(nil)
+        precondition(purple.count == yellow.count - shading.count && open.count == yellow.count - shading.count, "no colouring")
+        let plain = try JSONDecoder().decode(Drawing.Part.self, from: Data(#"{"name":"n","strokes":[],"labels":[]}"#.utf8))
+        precondition(plain.fill == nil && Drawing(reading: "", kind: "ink", say: "", parts: [plain], plot: old.plot).scaled(by: 2).parts[0].fill == nil, "old parts")
+        precondition(Drawing(reading: "", kind: "ink", say: "", parts: [.init(name: "n", strokes: [card], labels: [], fill: "pink")], plot: old.plot).scaled(by: 2).parts[0].fill == "pink",
+                     "a scaled part keeps its colour")
+
         print("drawing ok")
     }
 }

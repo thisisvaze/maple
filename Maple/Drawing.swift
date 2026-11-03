@@ -18,7 +18,11 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var name: String
         var strokes: [[[Double]]]
         var labels: [Label]
+        var fill: String? = nil  // one of `fills` colours its closed shapes in; anything else, or none, leaves them open
     }
+
+    /// The coloured pencils a part can be coloured in with (AgentPen.fills has their colours).
+    static let fills = ["yellow", "green", "blue", "pink"]
 
     /// What Muse Image is asked to paint.
     struct Picture: Codable, Equatable, Sendable {
@@ -42,7 +46,13 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
     /// Pen lines for a box of `size`: what the app computes itself (a plot's graph, a figure, a computed picture's lines)
     /// and the model's strokes in its parts (over those, notes on them), plus labels in Hershey's pen font. Model output
     /// is capped across all its parts, clamped into the box, and never executed.
-    func lines(in size: CGSize, font: Hershey = .pen) throws -> [[CGPoint]] {
+    /// `zoom` is the zoom the drawing is inked at, which spaces its colouring in.
+    func lines(in size: CGSize, font: Hershey = .pen, zoom: CGFloat = 1) throws -> [[CGPoint]] { try pen(in: size, font: font, zoom: zoom).map(\.line) }
+
+    /// `lines` in the order they're drawn and stacked: the drawn lines, then the colouring in of filled parts (in
+    /// `fill`), then labels over both, each with the capital height it writes at (`cap`, so the pen can write small
+    /// labels finer; a figure's or computed picture's own labels count as drawn).
+    func pen(in size: CGSize, font: Hershey = .pen, zoom: CGFloat = 1) throws -> [(line: [CGPoint], cap: CGFloat?, fill: String?)] {
         var lines: [[CGPoint]] = [], labels: [Label] = []
         switch kind {
         case "plot": (lines, labels) = try Plot.graph(plot, in: size)
@@ -50,21 +60,78 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         case "computed": lines = try computed.lines(in: size, font: font)
         default: break
         }
-        var budget = 12_000  // points
-        lines += parts.flatMap(\.strokes).prefix(256).compactMap { stroke in
-            let points = stroke.prefix(max(budget, 0)).compactMap { $0.count == 2 && $0.allSatisfy(\.isFinite) ? CGPoint(x: $0[0], y: $0[1]) : nil }
-            budget -= points.count
-            return points.count > 1 ? points : nil
+        var budget = 12_000, strokes = 256  // points and strokes, across all the parts
+        var pen: [(line: [CGPoint], cap: CGFloat?, fill: String?)] = lines.map { ($0, nil, nil) }, colouring: [(line: [CGPoint], cap: CGFloat?, fill: String?)] = []
+        for part in parts {
+            var closed: [[CGPoint]] = []
+            for stroke in part.strokes.prefix(max(strokes, 0)) {
+                strokes -= 1
+                let points = stroke.prefix(max(budget, 0)).compactMap { $0.count == 2 && $0.allSatisfy(\.isFinite) ? CGPoint(x: $0[0], y: $0[1]) : nil }
+                budget -= points.count
+                guard points.count > 1 else { continue }
+                pen.append((points, nil, nil))
+                if Self.closes(points) { closed.append(points) }
+            }
+            guard let fill = part.fill, Self.fills.contains(fill) else { continue }
+            // ponytail: each closed shape is coloured in on its own, so a shape inside another is coloured over twice;
+            // colour by even-odd across the part's shapes if drawings need holes.
+            colouring += closed.flatMap { Self.hatch($0, gap: Self.hatchGap / zoom, inset: Self.hatchInset / zoom) }.prefix(200).map { ($0, CGFloat?.none, Optional(fill)) }
         }
+        pen += colouring
         labels += parts.flatMap(\.labels)
         for label in labels.prefix(64) where [label.x, label.y, label.size].allSatisfy(\.isFinite) {
-            let text = String(label.text.prefix(80))
-            lines += font.lines(text, at: CGPoint(x: label.x, y: label.y), height: min(max(label.size, 4), 48))
+            let text = String(label.text.prefix(80)), cap = min(max(label.size, 4), 48)
+            pen += font.lines(text, at: CGPoint(x: label.x, y: label.y), height: cap).map { ($0, cap, String?.none) }
         }
         let box = CGRect(origin: .zero, size: size)
-        lines = lines.map { $0.map { CGPoint(x: min(max($0.x, box.minX), box.maxX), y: min(max($0.y, box.minY), box.maxY)) } }
-        guard !lines.isEmpty || painted else { throw Plot.Failure("The drawing came back empty") }
-        return lines
+        pen = pen.map { ($0.line.map { CGPoint(x: min(max($0.x, box.minX), box.maxX), y: min(max($0.y, box.minY), box.maxY)) }, $0.cap, $0.fill) }
+        guard !pen.isEmpty || painted else { throw Plot.Failure("The drawing came back empty") }
+        return pen
+    }
+
+    static let hatchGap: CGFloat = 3.4  // calibration knob: screen points between the colouring's strokes
+    static let hatchInset: CGFloat = 2.6  // calibration knob: screen points the colouring keeps inside a shape's line
+
+    /// Whether a drawn line comes back round to where it began, as a box or a circle does.
+    static func closes(_ points: [CGPoint]) -> Bool {
+        let box = points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
+        guard points.count > 3, box.width >= 6, box.height >= 6, let a = points.first, let b = points.last else { return false }
+        return hypot(a.x - b.x, a.y - b.y) <= max(4, hypot(box.width, box.height) * 0.08)
+    }
+
+    /// Colouring in for the closed `shape`, the way a hand does it with a pencil: diagonal strokes `gap` apart, kept
+    /// `inset` inside its line, each run of them one zig-zag stroke that turns at the shape's edge.
+    static func hatch(_ shape: [CGPoint], gap: CGFloat, inset: CGFloat) -> [[CGPoint]] {
+        let turn = CGAffineTransform(rotationAngle: .pi / 4), back = turn.inverted()  // level the strokes to scan across
+        let level = (shape + [shape[0]]).map { $0.applying(turn) }
+        let ys = level.map(\.y)
+        guard let top = ys.min(), let bottom = ys.max(), gap > 0, bottom - top > 2 * inset else { return [] }
+        let along = inset * 2.squareRoot()  // along a stroke, so it keeps `inset` clear of a level or upright line
+        var runs: [[CGPoint]] = [], open: [Int: [CGPoint]] = [:]  // zig-zags still going, by their place along the scan line
+        var y = top + inset, row = 0
+        while y <= bottom - inset, row < 400 {
+            var xs: [CGFloat] = []
+            for (a, b) in zip(level, level.dropFirst()) where (a.y <= y) != (b.y <= y) { xs.append(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x)) }
+            xs.sort()
+            var next: [Int: [CGPoint]] = [:]
+            for k in stride(from: 0, to: xs.count - 1, by: 2) where xs[k + 1] - xs[k] > 2 * along {
+                let ends = row % 2 == 0 ? [CGPoint(x: xs[k] + along, y: y), CGPoint(x: xs[k + 1] - along, y: y)]
+                                        : [CGPoint(x: xs[k + 1] - along, y: y), CGPoint(x: xs[k] + along, y: y)]
+                var run = open.removeValue(forKey: k / 2) ?? []
+                if let last = run.last, abs(last.x - ends[0].x) > 6 * gap {  // too far to turn to: lift and start again
+                    runs.append(run)
+                    run = []
+                }
+                run += ends
+                next[k / 2] = run
+            }
+            runs += open.values  // a run whose shape ended or split stops here
+            open = next
+            y += gap
+            row += 1
+        }
+        runs += open.values
+        return runs.filter { $0.count > 1 }.map { $0.map { $0.applying(back) } }
     }
 
     /// Nothing left to draw: an ink drawing whose parts have no strokes or labels.
@@ -75,7 +142,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var out = self
         out.parts = parts.map { part in
             Part(name: part.name, strokes: part.strokes.map { $0.map { $0.map { $0 * scale } } },
-                 labels: part.labels.map { Label(text: $0.text, x: $0.x * scale, y: $0.y * scale, size: $0.size * scale) })
+                 labels: part.labels.map { Label(text: $0.text, x: $0.x * scale, y: $0.y * scale, size: $0.size * scale) }, fill: part.fill)
         }
         return out
     }
