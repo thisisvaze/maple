@@ -34,14 +34,26 @@ nonisolated enum Scribble {
 }
 
 /// What fills an empty box while Maple draws in it, in pencil on the page: Maple's blue pencil traces just inside the
-/// box's own line, then light hatching fills it, both fade, and it starts again. Everything follows the line the box was
+/// box's own line as light hatching fills it, both fade, and it starts again. Everything follows the line the box was
 /// drawn with, so it fits a slanted or wobbly box; a box with no drawn line, like a picture being edited, uses its rect.
 nonisolated enum Sketch {
     // Calibration knobs, in screen points at the zoom the box was drawn at, and seconds.
-    static let traceInset: CGFloat = 7, hatchInset: CGFloat = 5, gap: CGFloat = 7
-    static let traceWidth: CGFloat = 2.2, hatchWidth: CGFloat = 1.1, wobble: CGFloat = 0.6
-    static let trace: CFTimeInterval = 1.1, hatch: CFTimeInterval = 1.6, hold: CFTimeInterval = 0.3, fade: CFTimeInterval = 0.6
-    static var cycle: CFTimeInterval { trace + hatch + hold + fade }
+    static let traceInset: CGFloat = 7, hatchInset: CGFloat = 5, gap: CGFloat = 6
+    static let traceWidth: CGFloat = 2.2, hatchWidth: CGFloat = 1.2, wobble: CGFloat = 0.7, drift: CGFloat = 120  // drift: a wobble's length
+    static let trace: CFTimeInterval = 1.1, hatchFrom: CFTimeInterval = 0.2, hatch: CFTimeInterval = 1.6
+    static let hold: CFTimeInterval = 0.6, fade: CFTimeInterval = 0.6
+    static var cycle: CFTimeInterval { hatchFrom + hatch + hold + fade }
+
+    /// The points of a box's own lines, from the strokes of its mark, each a stroke's points: a box written under its
+    /// label comes with the label, and its letters are left out, as any stroke under half as long as the longest.
+    static func lines(_ strokes: [[CGPoint]]) -> [CGPoint] {
+        let spans = strokes.map { stroke -> CGFloat in
+            let box = stroke.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
+            return box.isNull ? 0 : max(box.width, box.height)
+        }
+        guard let longest = spans.max(), longest > 0 else { return [] }
+        return zip(strokes, spans).filter { $0.1 >= longest / 2 }.flatMap(\.0)
+    }
 
     /// The convex hull of `points`, clockwise on screen from its leftmost point: the outside of a drawn box.
     static func hull(_ points: [CGPoint]) -> [CGPoint] {
@@ -195,12 +207,15 @@ final class Thinking: UIView {
         let hull = Sketch.hull(outline.count > 2 ? outline : corners)
         // A small box keeps a little room in the middle rather than turning itself inside out.
         let line = Sketch.around(Sketch.inset(hull, by: min(Sketch.traceInset * unit, side / 6)), every: 3 * unit)
-        let middle = CGPoint(x: bounds.midX, y: bounds.midY)
+        // Each take drifts in and out a little, slowly along the line, in whole waves round it so the corner it starts at
+        // closes.
+        let middle = CGPoint(x: bounds.midX, y: bounds.midY), laps = max(2, (CGFloat(line.count) * 3 / Sketch.drift).rounded())
         takes = (0..<3).map { take in
             let path = CGMutablePath()
             path.addLines(between: line.enumerated().map { i, p in
                 let out = CGVector(dx: p.x - middle.x, dy: p.y - middle.y), length = max(hypot(out.dx, out.dy), 1)
-                let shift = Sketch.wobble * unit * sin(CGFloat(i % (line.count - 1)) * 0.9 + CGFloat(take) * 2.1) / length
+                let a = 2 * .pi * laps * CGFloat(i) / CGFloat(line.count - 1), k = CGFloat(take) * 2.1
+                let shift = Sketch.wobble * unit * (0.7 * sin(a + k) + 0.3 * sin(2 * a + 1.7 * k)) / length
                 return CGPoint(x: p.x + out.dx * shift, y: p.y + out.dy * shift)
             })
             return path
@@ -227,7 +242,7 @@ final class Thinking: UIView {
             (trace.path, trace.strokeEnd, hatching.strokeEnd) = (takes[0], 1, 1)
             guard running else { return [trace, hatching].forEach { $0.removeAllAnimations() } }
             guard hatching.animation(forKey: "sketch") == nil else { return }
-            let cycle = Sketch.cycle, fading = Sketch.trace + Sketch.hatch + Sketch.hold
+            let cycle = Sketch.cycle, filled = Sketch.hatchFrom + Sketch.hatch, fading = filled + Sketch.hold
             func keys(_ path: String, _ values: [CGFloat], at times: [CFTimeInterval]) -> CAKeyframeAnimation {
                 let keys = CAKeyframeAnimation(keyPath: path)
                 (keys.values, keys.keyTimes) = (values, times.map { NSNumber(value: $0 / cycle) })
@@ -242,7 +257,7 @@ final class Thinking: UIView {
             let draw = keys("strokeEnd", [0, 1, 1], at: [0, Sketch.trace, cycle])
             draw.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .linear)]
             trace.add(looping([draw, fade]), forKey: "sketch")
-            hatching.add(looping([keys("strokeEnd", [0, 0, 1, 1], at: [0, Sketch.trace, Sketch.trace + Sketch.hatch, cycle]), fade]), forKey: "sketch")
+            hatching.add(looping([keys("strokeEnd", [0, 0, 1, 1], at: [0, Sketch.hatchFrom, filled, cycle]), fade]), forKey: "sketch")
             trace.add(boil(hold: Scribble.hold(thinking: true)), forKey: "boil")
             return
         }
@@ -292,6 +307,6 @@ final class Thinking: UIView {
     private func updateColors() {
         scribble.strokeColor = Self.pencil.resolvedColor(with: traitCollection).cgColor
         trace.strokeColor = scribble.strokeColor
-        hatching.strokeColor = UIColor.label.withAlphaComponent(0.28).resolvedColor(with: traitCollection).cgColor  // a soft graphite
+        hatching.strokeColor = UIColor.label.withAlphaComponent(0.34).resolvedColor(with: traitCollection).cgColor  // a soft graphite
     }
 }

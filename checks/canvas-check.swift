@@ -365,6 +365,10 @@ struct Check {
             return sides.allSatisfy { $0 >= -0.01 } || sides.allSatisfy { $0 <= 0.01 }
         }
         precondition(ends.count > 100 && ends.allSatisfy(within), "hatching ends on the box's inner line: \(ends.count) ends")
+        // A box written under its label comes with the label's strokes; the sketch keeps only the box's own lines.
+        let label = [[CGPoint(x: 20, y: -40), CGPoint(x: 60, y: -20)], [CGPoint(x: 70, y: -45), CGPoint(x: 120, y: -15), CGPoint(x: 180, y: -30)]]
+        let kept = Sketch.lines(label + [drawn])
+        precondition(kept == drawn, "the label's letters are left out: \(kept.count) points")
         let sketch = Thinking(style: .sketch)
         sketch.outline = drawn
         sketch.place(over: CGRect(x: 0, y: 0, width: 600, height: 400), turn: 0, zoom: 2)

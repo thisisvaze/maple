@@ -883,10 +883,9 @@ final class Marks {
     func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, turn: CGFloat, zoom: CGFloat,
               asked: Note? = nil, reply: [String] = [], request: String? = nil, memory: [Memory.Line] = []) async {
         guard active, present(trigger) else { return }
-        // The box's own line, in its points from its top-left, so the sketch follows it.
-        let inBox = CGAffineTransform(rotationAngle: turn)
-        let outline = canvas.drawing.strokes.filter { trigger.contains(Self.id($0)) }.flatMap { Self.points($0, every: 2 / zoom).joined() }
-            .map { $0.applying(inBox) }.map { CGPoint(x: $0.x - box.minX, y: $0.y - box.minY) }
+        // The box's own lines, in its points from its top-left, so the sketch follows them and not its label.
+        let inBox = CGAffineTransform(rotationAngle: turn).concatenating(CGAffineTransform(translationX: -box.minX, y: -box.minY))
+        let outline = Sketch.lines(canvas.drawing.strokes.filter { trigger.contains(Self.id($0)) }.map { Self.points($0, every: 2 / zoom).joined().map { $0.applying(inBox) } })
         let done = sketch(over: box, turn: turn, outline: outline)
         asking += 1
         defer { asking -= 1 }
