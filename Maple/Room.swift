@@ -16,6 +16,8 @@ nonisolated enum Room {
         var strokes: [Stroke]  // everything on and near the screen
         var doubleDot: Bool  // the mark is two nib taps ("look here"), not a written ?
         var trailing = false  // the mark is a small sign ending the line, an = or …: the answer takes its letters' size and baseline
+        var bullet = false  // the mark starts a list item, a dash, dot, number or tick box: its item goes after it on its line, or nowhere
+        var down = false  // the mark is a …: alone on its line, its answer carries the list on down the page from the line under it
         var screen: [CGPoint]  // the screen's four corners in page points, clockwise from top-left
         var avoid: [[CGPoint]]  // page-point polygons in the way: the Pages button, other answers' dots
         var screenAngle: CGFloat  // the page's rotation on screen, radians
@@ -46,6 +48,8 @@ nonisolated enum Room {
     static let capFactor: CGFloat = 0.9  // calibration knob: a capital against the ?'s height, or the letters' median
     static let capRange: ClosedRange<CGFloat> = 12 ... 26  // calibration knob: screen points
     static let defaultCap: CGFloat = 18  // calibration knob: screen points, a double dot's cap until it finds letters
+    static let hangOut: CGFloat = 3  // calibration knob: default caps left of a mark alone on its line the letters over it may start
+    static let dashRise: CGFloat = 0.35  // calibration knob: caps a dash or dot bullet sits over its item's baseline, half an x-height
     // calibration knob: default caps from a double dot to the stroke under it, or else to the nearest stroke
     static let under: CGFloat = 1, nearest: CGFloat = 2
     static let word: CGFloat = 0.4  // calibration knob: caps between a word's letters; a double dot's seed grows to its word
@@ -108,7 +112,8 @@ nonisolated enum Room {
         let toScreen = CGAffineTransform(rotationAngle: level - angle)  // reading frame to the screen's, where the screen is a rect
         let inset = box(request.screen, CGAffineTransform(rotationAngle: level)).insetBy(dx: margin * cap, dy: margin * cap)
         guard !inset.isNull else { return nil }
-        let grid = Grid(request, frame: frame, cell: cell * cap), nib = request.nib.map { CGRect(origin: $0.applying(frame), size: .zero) }
+        // A bullet's own line shows whether the person is writing its item, so the pen moving on, to the next bullet, is no matter.
+        let grid = Grid(request, frame: frame, cell: cell * cap), nib = request.bullet ? nil : request.nib.map { CGRect(origin: $0.applying(frame), size: .zero) }
 
         func onScreen(_ p: CGPoint) -> Bool {
             let s = p.applying(toScreen)
@@ -146,8 +151,9 @@ nonisolated enum Room {
             }
             return nil
         }
-        if let placed = written(.sameLine, at: CGPoint(x: mark.maxX + after * cap, y: line.capTop))
-            ?? written(.nextLine, at: CGPoint(x: band.minX, y: band.maxY + below * cap)) { return placed }
+        if !(request.down && line.members.isEmpty), let placed = written(.sameLine, at: CGPoint(x: mark.maxX + after * cap, y: line.capTop)) { return placed }
+        guard !request.bullet else { return nil }  // no room after a bullet: the person is filling it in themselves
+        if let placed = written(.nextLine, at: CGPoint(x: band.minX, y: band.maxY + below * cap)) { return placed }
 
         /// Dashes from the middle of the mark's nearest edge to the middle of the block's, or nil when the line between
         /// them crosses ink away from its ends and outside `near`. The dashes and gaps stretch to fit it end to end.
@@ -208,8 +214,8 @@ nonisolated enum Room {
         let marked = request.strokes.reduce(CGRect.null) { $1.mark ? $0.union(box($1.points, frame)) : $0 }
         guard !marked.isNull else { return nil }
         let boxes = request.strokes.compactMap { $0.person && !$0.mark ? box($0.points, frame) : nil }.filter { !$0.isNull }
-        // A trailing = or … is shorter than its letters: chain at a usual size, then take theirs.
-        var members: [Int] = [], cap = request.trailing ? clamp(defaultCap / zoom) : clamp(capFactor * marked.height)
+        // A trailing = or … or a bullet is shorter than its letters: chain at a usual size, then take theirs.
+        var members: [Int] = [], cap = request.trailing || request.bullet ? clamp(defaultCap / zoom) : clamp(capFactor * marked.height)
         if request.doubleDot {
             // The strokes touching the dots, else the nearest right under them, else the nearest at all, else the dots alone.
             let fallback = clamp(defaultCap / zoom), strip = CGRect(x: marked.minX, y: marked.maxY, width: marked.width, height: under * fallback)
@@ -247,9 +253,23 @@ nonisolated enum Room {
         chain(chainGap)
         let fromLetters = (request.doubleDot || request.trailing) && !members.isEmpty
         if fromLetters { cap = clamp(capFactor * median(members.map { boxes[$0].height })) }
+        // Alone on its line, a bullet or a … under a list has no letters of its own: it takes the size of the nearest row of
+        // the person's letters over it, past rows Maple filled and dashes and dots too short to be letters.
+        // ponytail: nor any to square the frame to, so a list on a slant is carried on level; square to that row if it shows.
+        else if request.bullet || request.trailing {
+            let usual = clamp(defaultCap / zoom), over = boxes.filter {
+                $0.height >= fitHeight * usual && $0.maxY <= marked.midY && $0.maxX >= marked.minX - hangOut * usual && $0.minX <= marked.maxX + bandMax * cap
+            }
+            if let low = over.max(by: { $0.maxY < $1.maxY }) {
+                let row = over.filter { min($0.maxY, low.maxY) - max($0.minY, low.minY) >= chainOverlap * min($0.height, low.height) }
+                cap = clamp(capFactor * median(row.map(\.height)))
+            }
+        }
         let letters = ((request.doubleDot ? [] : [marked]) + members.map { boxes[$0] }).filter { $0.height >= fitHeight * cap }
         let bottoms = letters.map { CGPoint(x: $0.midX, y: $0.maxY) }
-        let baseline = fromLetters ? median(members.map { boxes[$0].maxY }) : marked.maxY
+        // A dash or dot bullet floats at half an x-height; a number, a tick box or a … stands on the baseline.
+        let floats = request.bullet && marked.height < fitHeight * cap
+        let baseline = fromLetters ? median(members.map { boxes[$0].maxY }) : floats ? marked.midY + dashRise * cap : marked.maxY
         return Line(mark: mark, band: band, cap: cap, capTop: baseline - cap, bottoms: bottoms, members: members)
     }
 

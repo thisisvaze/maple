@@ -51,7 +51,7 @@ struct Check {
         precondition(sent.contains("- x² = 49 ?") && sent.contains("Its current name: Equations"), "name context: \(sent)")
 
         // A ?? goes to Muse Wonder with time to think; every other mark stays on Spark at minimal effort.
-        for (gesture, model, effort) in [("double_question", "muse-wonder-1.0", "medium"), ("question", "muse-spark-1.3", "minimal"), ("equals", "muse-spark-1.3", "minimal")] {
+        for (gesture, model, effort) in [("double_question", "muse-wonder-1.0", "medium"), ("question", "muse-spark-1.3", "minimal"), ("equals", "muse-spark-1.3", "minimal"), ("bullet", "muse-spark-1.3", "minimal")] {
             let answer = try await Agent(muse: Muse(key: "answer")).ask(near: Data(), around: Data(), gesture: gesture, threads: [], target: nil)
             let body = MuseStub.bodies.last!
             precondition(answer.reply == (gesture == "double_question" ? "375 g" : ". 375 g") && body["model"] as? String == model && (body["reasoning"] as? [String: String])?["effort"] == effort,

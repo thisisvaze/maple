@@ -340,7 +340,7 @@ final class Marks {
         let target = notes.filter { Self.distance(middle, $0) <= reach }.min { Self.distance(middle, $0) < Self.distance(middle, $1) }?.id
         let anchor = Self.anchor(mark, zoom).applying(reading.inverted()), view = (screen: screen, avoid: [pagesCorner])
         // A double dot is known on the device, so its orb shows at once. Anything else, Jev looks at first, and only a ? or
-        // ??, an = or … ending a line, or an empty box goes on to Muse.
+        // ??, an = or … ending a line, an empty list item, or an empty box goes on to Muse.
         let thinking = dots == nil ? nil : add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
         run { [self] in
             let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
@@ -365,7 +365,7 @@ final class Marks {
                 if let asked, let box = asked.asked {
                     await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: asked.trigger, box: box.box, turn: box.turn, zoom: asked.zoom, asked: asked, reply: trigger, memory: memory)
                 }
-            case "question", "double_question", "equals", "dots":  // the orb shows from the moment Jev sees the mark
+            case "question", "double_question", "equals", "dots", "bullet":  // the orb shows from the moment Jev sees the mark
                 await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, anchor: anchor,
                           turn: turn, zoom: zoom, view: view, bubble: add(Bubble(anchor: anchor, zoom: zoom, turn: turn)), memory: memory)
             case "double_dot":
@@ -446,9 +446,10 @@ final class Marks {
         bubbles.removeAll { $0 === bubble }
     }
 
-    /// Answers a ?, a double dot, or an = or … ending a line in ink beside it, once the pen rests. A ??'s longer answer,
-    /// exact texts, and answers the pen can't write or that find no room, stay a quiet dot to tap open, or for a double
-    /// dot, opened at once. The dot is the thinking orb meanwhile.
+    /// Answers a ?, a double dot, an = or … ending a line, or an empty bullet in ink beside it, once the pen rests. A ??'s
+    /// longer answer, exact texts, and answers the pen can't write or that find no room, stay a quiet dot to tap open, or
+    /// for a double dot, opened at once; a bullet with no room after it is being filled in by hand, and is left alone.
+    /// The dot is the thinking orb meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?, trigger: [String],
              anchor: CGPoint, turn: CGFloat, zoom: CGFloat, view: (screen: [CGPoint], avoid: [[CGPoint]]), bubble: Bubble?, memory: [Memory.Line] = []) async {
         guard active, present(trigger) else { return remove(bubble) }
@@ -670,6 +671,10 @@ final class Marks {
         }
         guard let hand = handwrite(text, for: note, screen: view.screen, avoid: view.avoid, turn: note.turn ?? 0, nib: nib(after: note.trigger),
                                    besides: bubble) else {
+            guard note.mark != "bullet" else {  // writing after the bullet: they're filling it in themselves
+                remove(bubble)
+                return nil
+            }
             logger.notice("no room: a quiet dot")
             show(note, bubble: bubble)
             return nil
@@ -692,7 +697,8 @@ final class Marks {
              CGPoint(x: dot.frame.maxX, y: dot.frame.maxY), CGPoint(x: dot.frame.minX, y: dot.frame.maxY)].map { CGPoint(x: $0.x / canvas.zoomScale, y: $0.y / canvas.zoomScale) }
         }
         let request = Room.Request(strokes: ink(around: screen, marking: Set(note.trigger), leaving: leaving, zoom: zoom), doubleDot: note.mark == "double_dot",
-                                   trailing: ["equals", "dots"].contains(note.mark), screen: screen, avoid: avoid + dots, screenAngle: turn, zoom: zoom, nib: nib)
+                                   trailing: ["equals", "dots"].contains(note.mark), bullet: note.mark == "bullet", down: note.mark == "dots",
+                                   screen: screen, avoid: avoid + dots, screenAngle: turn, zoom: zoom, nib: nib)
         let start = ContinuousClock.now
         guard let place = Room.place(request, layout: { cap, width in
             let lines = pen.wrap(text, cap: cap, width: width)

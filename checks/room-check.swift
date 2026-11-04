@@ -151,6 +151,51 @@ struct Check {
         precondition(filled.kind == .sameLine && near(filled.cap, letterCap) && near(filled.origin.x, blank.maxX + 0.6 * letterCap)
                      && near(filled.origin.y, base - letterCap), "a blank after = is filled at the letters' size: \(filled)")
 
+        // A list, "- Hotel 412" over "- Taxi 38", and an empty dash under it: the item goes after the dash at the size of
+        // the letters over it, its baseline half an x-height under the dash, and nowhere once the person starts writing it.
+        let listed = write("- Hotel 412", x: 200, base: 420, h: h).strokes + write("- Taxi 38", x: 200, base: 420 + 1.8 * h, h: h).strokes
+        let row = 420 + 3.6 * h, dash = write("-", x: 200, base: row, h: h, mark: true), dashBox = Room.box(dash.strokes.flatMap(\.points))
+        var bullet = request(listed + dash.strokes)
+        bullet.bullet = true
+        let item = place(bullet)!
+        precondition(item.kind == .sameLine && near(item.cap, letterCap) && near(item.origin.x, dashBox.maxX + 0.6 * letterCap)
+                     && near(item.origin.y, dashBox.midY + 0.35 * letterCap - letterCap), "an empty bullet is filled at the list's size: \(item)")
+        var byHand = request(listed + dash.strokes + write("Sun", x: dash.end + 0.4 * h, base: row, h: h).strokes)
+        byHand.bullet = true
+        precondition(place(byHand) == nil, "a bullet being filled in by hand is left alone")
+        // The pen already on the next bullet, a line down, doesn't push this one's item away.
+        bullet.nib = CGPoint(x: dashBox.maxX, y: dashBox.midY + 1.8 * h)
+        precondition(place(bullet)?.kind == .sameLine, "the next bullet drawn before this one is filled")
+        // Under a row Maple filled, a dash and its blue item, the next bullet still takes the person's letters' size.
+        let filledRow = write("-", x: 200, base: row, h: h).strokes + write("Sunscreen", x: 230, base: row, h: h).strokes.map {
+            Stroke(points: $0.points, person: false, mark: false)
+        }
+        let nextDash = write("-", x: 200, base: row + 1.8 * h, h: h, mark: true)
+        var underFilled = request(listed + filledRow + nextDash.strokes)
+        underFilled.bullet = true
+        let nextItem = place(underFilled)!
+        precondition(nextItem.kind == .sameLine && near(nextItem.cap, letterCap), "the size of the person's list, past Maple's row: \(nextItem)")
+
+        // A … on its own line under that list carries it on down the page: from the line under the dots, at their left
+        // edge, at the list's size. Without `down` it would go after the dots.
+        let ellipsis = (0 ..< 3).map { i in
+            Stroke(points: [CGPoint(x: 200 + CGFloat(i) * 0.3 * h, y: row - 1), CGPoint(x: 200.5 + CGFloat(i) * 0.3 * h, y: row)], person: true, mark: true)
+        }
+        var carried = request(listed + ellipsis)
+        carried.trailing = true
+        precondition(place(carried)!.kind == .sameLine, "along the line")
+        carried.down = true
+        for text in [30, 8] {  // three items, or just one
+            let grown = place(carried, text: text)!
+            precondition(grown.kind == .nextLine && near(grown.cap, letterCap) && near(grown.origin.x, 200) && near(grown.origin.y, row + 0.5 * letterCap),
+                         "a list carried on starts under the dots: \(grown)")
+        }
+        // A … along a line, after letters, is carried on after it even so.
+        let sequence = write("1 2 3 5 ", x: 200, base: row, h: h).strokes + ellipsis.map { Stroke(points: $0.points.map { CGPoint(x: $0.x + 4.2 * h, y: $0.y) }, person: true, mark: true) }
+        var inline = request(sequence)
+        (inline.trailing, inline.down) = (true, true)
+        precondition(place(inline)?.kind == .sameLine, "a … ending a line of letters stays on it")
+
         // More writing after the ? on that line: under the line from its left edge, 0.5 cap below its band (a descender).
         let more = question + write(" and why", x: q.end, base: base, h: h).strokes, band = Room.box(more.flatMap(\.points))
         let next = place(request(more))!

@@ -4,7 +4,7 @@ A notebook that thinks with you.
 
 Write a weekend's costs down a page, then "split 4 ways ?", and lift the pencil. Beside it, in blue ink: "Total is 1033.92. Each pays 258.48." Draw an empty box under "height over time", and the curve draws itself in. Circle a card in coral and write "suggest a recipe", and only that card redraws. No screenshot, no switching apps, no retyping the page.
 
-Maple is a pen-and-paper workspace for iPad and Apple Pencil. Each time the pen rests, TypeSafe's Jev reads which mark you made, in about 0.2 s. Plain writing is left alone. A `?`, a double dot, an empty box, a trailing `=` or `…`, or a coral mark wakes Meta's Muse Spark, which sees the page as a picture and writes its answer in ink beside the mark, draws inside the box, or changes its own work. Plain code checks what comes back: a calculator for every number, real geometry for diagrams, and a memory that keeps only your own words.
+Maple is a pen-and-paper workspace for iPad and Apple Pencil. Each time the pen rests, TypeSafe's Jev reads which mark you made, in about 0.2 s. Plain writing is left alone. A `?`, a double dot, an empty box, a trailing `=` or `…`, an empty bullet, or a coral mark wakes Meta's Muse Spark, which sees the page as a picture and writes its answer in ink beside the mark, draws inside the box, or changes its own work. Plain code checks what comes back: a calculator for every number, real geometry for diagrams, and a memory that keeps only your own words.
 
 Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebralvalley.ai/e/meta-ai-developer-hackathon) (Indie Developer track, "Build for Your World"), Oct 27 – Nov 4, 2026. Every commit in this repository was made during the event. Every word Maple says, in the app, this README and the video, follows [VOICE.md](VOICE.md).
 
@@ -16,7 +16,8 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 - **A double dot**, which the iPad reads from its timing, is answered the same way.
 - **`??`** thinks harder: the question goes to Muse Wonder at medium effort instead of Spark at minimal. Its longer answer, explaining why, waits behind a quiet dot (15 to 18 s for "why is e^iπ = −1 ??").
 - **`=` with nothing after it** gets only the value, on the rest of the line: "75% of 500 g =" gets 375 g, and "R =" gets 8.314 J/(mol·K).
-- **`…` trailing off a sequence or a list** carries it on in the same pattern: "1, 1, 2, 3, 5, …" gets 8, 13, 21. Both of these take the size and baseline of the line's letters, not of the small sign.
+- **`…` trailing off a sequence or a list** carries it on in the same pattern: "1, 1, 2, 3, 5, …" gets 8, 13, 21. Both of these take the size and baseline of the line's letters, not of the small sign. A `…` on its own line under a list carries the list on down the page: about three more items, one per line, each with a bullet like yours or the next number.
+- **An empty bullet** under a list, a dash, a dot, a number like "3." or a tick box, gets the next item written after it, at the list's size: under "– passport, – charger", a new "–" gets "sunscreen". Draw another and it gets the next. If you start writing after the bullet yourself, Maple leaves it to you.
 - **An empty box** is drawn in, from the writing around it. See [Boxes](#boxes).
 - **Coral marks** change what Maple drew or wrote. See [Edit brush](#edit-brush).
 

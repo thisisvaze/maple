@@ -1,8 +1,8 @@
 import Foundation
 
 /// TypeSafe's Jev takes the first look at every mark: which gesture the newest ink makes, from the close-up, fast and
-/// cheap. Muse is only asked when Jev sees a ? or ??, an = or … ending a line, or an empty box. API: POST /v1/systemone,
-/// the image as a multipart part.
+/// cheap. Muse is only asked when Jev sees a ? or ??, an = or … ending a line, an empty list item, or an empty box. API:
+/// POST /v1/systemone, the image as a multipart part.
 nonisolated struct Jev: Sendable {
     static let endpoint = URL(string: "https://api.typesafe.ai/v1/systemone")!
     var key: String
@@ -21,15 +21,16 @@ nonisolated struct Jev: Sendable {
         "equals": "An equals sign ending a line, with nothing written after it yet: a blank to fill in.",
         "circle": "A loop around existing words or a drawing.",
         "box": "A rectangle around existing words or a drawing.",
-        "frame": "An empty rectangle under a label, waiting to be filled.",
+        "frame": "An empty rectangle under a label, waiting to be filled, bigger than the letters around it.",
         "underline": "One line under words.",
         "double_underline": "Two lines under words.",
         "strike": "A line crossing words out.",
         "scribble": "Dense scratching-out over ink.",
         "arrow": "A line with an arrowhead.",
-        "dots": "An ellipsis: three dots in a row, trailing off after a list, a sequence or a sentence.",
+        "dots": "An ellipsis: three dots in a row, trailing off after a list, a sequence or a sentence, or on their own line under a list.",
+        "bullet": "A new list item with nothing written after it yet: a short dash, a dot, a number or a small tick box starting a line under the items before it.",
         "check": "A check or tick.",
-        "writing": "Ordinary writing without a question mark, an equals sign or an ellipsis at its end.",
+        "writing": "Ordinary writing without a question mark, an equals sign or an ellipsis at its end, and not an empty list item.",
         "other": "Something else.",
     ]
 
