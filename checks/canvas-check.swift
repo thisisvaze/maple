@@ -366,10 +366,11 @@ struct Check {
         defer { controller.marks.stop(); controller.turner.isHidden = true }
         controller.view.layoutIfNeeded()
         precondition(controller.controls.frame.minY < controller.view.safeAreaInsets.top + 30)
-        precondition(abs(controller.toolDock.frame.minX - controller.view.safeAreaInsets.left - 72) < 1,
-                     "scaled toolbar starts 12 pt beside the Pages button")
-        precondition(abs(controller.toolDock.frame.midY - controller.view.safeAreaInsets.top - 38) < 1)
-        precondition(controller.toolDock.transform.a == 0.75 && controller.toolDock.transform.d == 0.75)
+        precondition(abs(controller.toolDock.frame.midX - controller.view.safeAreaLayoutGuide.layoutFrame.midX) < 1,
+                     "toolbar is centered at the top")
+        precondition(abs(controller.toolDock.frame.height - controller.controls.frame.height) < 1
+                     && abs(controller.toolDock.frame.midY - controller.controls.frame.midY) < 1,
+                     "toolbar is as tall as the Maple pill and level with it")
         for text in ["Question recognized", "Updated together", String(repeating: "Noted: a longer update. ", count: 6)] {
             controller.marks.flash(text)
             controller.view.layoutIfNeeded()

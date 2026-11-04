@@ -50,6 +50,7 @@ final class Marks {
     var asking = 0
     weak var lastTag: UILabel?
     weak var statusAnchor: UIView?
+    weak var statusClear: UIView?  // the status stays right of this, the tool dock
     var work: [UUID: Task<Void, Never>] = [:]  // reading and answering in flight, cancelled when the page closes
     var closed = false
     var persist: (() -> Void)?
@@ -417,7 +418,7 @@ final class Marks {
         screen.addSubview(label)
         NSLayoutConstraint.activate([
             label.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
-            label.leadingAnchor.constraint(greaterThanOrEqualTo: screen.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: statusClear?.trailingAnchor ?? screen.safeAreaLayoutGuide.leadingAnchor, constant: 16),
         ])
         if let anchor = statusAnchor {
             NSLayoutConstraint.activate([

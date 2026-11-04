@@ -10,6 +10,7 @@ struct Gallery: View {
     @State var settings = false
     @State var renaming: Page?
     @State var newName = ""
+    @State var titleFrame = CGRect.zero  // the open page's name on screen
     @AppStorage("voiceInput") var voiceInput = false
     @AppStorage("aiEnabled") var aiEnabled = true
     @Namespace var zoom
@@ -132,18 +133,24 @@ struct Gallery: View {
             }
         }
         .fullScreenCover(item: $open, onDismiss: { pages = Page.all() }) { page in
-            Paper(page: page, voiceEnabled: voiceInput, aiEnabled: aiEnabled)
+            Paper(page: page, voiceEnabled: voiceInput, aiEnabled: aiEnabled, titleFrame: titleFrame)
                 .ignoresSafeArea()
                 .overlay(alignment: .topLeading) {
-                    Button { open = nil } label: {
-                        Label("Pages", systemImage: "square.grid.2x2")
-                            .labelStyle(.iconOnly)
-                            .font(.title3)
-                            .frame(width: 44, height: 44)
-                            .background(.regularMaterial, in: Circle())
-                            .contentShape(Rectangle())
+                    HStack(spacing: 12) {
+                        Button { open = nil } label: {
+                            Label("Pages", systemImage: "square.grid.2x2")
+                                .labelStyle(.iconOnly)
+                                .font(.title3)
+                                .frame(width: 44, height: 44)
+                                .background(.regularMaterial, in: Circle())
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        PageTitle(page: page)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { titleFrame = $0 }
                     }
-                    .buttonStyle(.plain)
+                    // Up to the tool dock centered at the top, 146 pt wide, with a gap.
+                    .containerRelativeFrame(.horizontal, alignment: .leading) { width, _ in max(width / 2 - 100, 44) }
                     .padding(16)
                     .containerCornerOffset(.leading)  // in a window, sit beside the close and resize controls, not under them
                 }
@@ -230,6 +237,62 @@ struct Card: View {
                     loading = false
                 }
             }
+    }
+}
+
+/// The open page's name beside the Pages button. Tap it to type a name, or write on it with Apple Pencil: Scribble's
+/// scratch out, circle and join work as in any text field. While the page is open, Maple names it again a little after
+/// its ink changes, until the person names it; an empty name hands it back to Maple.
+struct PageTitle: View {
+    static let every: Duration = .seconds(8)  // calibration knob: how often to look for new ink to name, one Muse call each time
+    let page: Page
+    @State var draft: String
+    @State var start: String  // the name when editing began, so Maple renaming meanwhile isn't taken for the person's
+    @FocusState var editing: Bool
+
+    init(page: Page) {
+        self.page = page
+        let name = page.savedName ?? ""
+        _draft = State(initialValue: name)
+        _start = State(initialValue: name)
+    }
+
+    var body: some View {
+        // The hidden text sizes the field to its name, and cuts a long one short before the tools.
+        Text(draft.isEmpty ? "Untitled page" : draft)
+            .lineLimit(1)
+            .padding(.trailing, 2)  // room for the caret
+            .hidden()
+            .overlay {
+                TextField("Untitled page", text: $draft)
+                    .textFieldStyle(.plain)
+                    .focused($editing)
+                    .submitLabel(.done)
+                    .onSubmit(commit)
+            }
+            .font(.headline)
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .background(.regularMaterial, in: Capsule())
+            .contentShape(Capsule())
+            .onTapGesture { editing = true }  // the padding too
+            .accessibilityLabel("Page name")
+            .animation(editing ? nil : .easeInOut(duration: 0.28), value: draft)  // Maple's new name eases in; typing doesn't
+            .onChange(of: editing) { if !editing { commit() } }
+            .onDisappear(perform: commit)
+            .task {
+                while !Task.isCancelled {
+                    if !editing, page.needsName { _ = await page.nameFromInk() }
+                    if !editing { draft = page.savedName ?? ""; start = draft }
+                    try? await Task.sleep(for: Self.every)
+                }
+            }
+    }
+
+    func commit() {
+        if draft != start { page.rename(draft) }
+        draft = page.savedName ?? ""
+        start = draft
     }
 }
 

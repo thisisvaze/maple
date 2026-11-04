@@ -130,12 +130,14 @@ final class Turner: UIWindow {
 
     override var undoManager: UndoManager? { controller?.undoManager }  // a window would otherwise answer with its own
 
-    /// Touches go through to what sits on the page in the app's window: an alert, its own buttons, the Pages corner. That
-    /// corner goes by position: SwiftUI's window doesn't answer a hit test the same way twice for one touch.
+    /// Touches go through to what sits on the page in the app's window: an alert, its own buttons, the Pages corner and the
+    /// page's name beside it, so Scribble can write there. Those go by position: SwiftUI's window doesn't answer a hit test
+    /// the same way twice for one touch.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let controller, let page = controller.view, controller.presentedViewController == nil else { return nil }
         let spot = convert(point, to: page), safe = page.safeAreaInsets
         let corner = CGRect(x: 0, y: 0, width: safe.left + Self.pagesButton, height: safe.top + Self.pagesButton)
+            .union(controller.titleFrame.insetBy(dx: -6, dy: -6))
         return page.hitTest(spot, with: event) === page && !corner.contains(spot) ? super.hitTest(point, with: event) : nil
     }
 }
@@ -144,8 +146,10 @@ struct Paper: UIViewControllerRepresentable {
     let page: Page
     var voiceEnabled = false
     var aiEnabled = true
+    var titleFrame = CGRect.zero  // the page's name on screen, which takes touches from the paper
     func makeUIViewController(context: Context) -> CanvasController { CanvasController(page: page) }
     func updateUIViewController(_ controller: CanvasController, context: Context) {
+        controller.titleFrame = titleFrame
         controller.setAIEnabled(aiEnabled)
         controller.setVoiceEnabled(voiceEnabled)
     }
@@ -166,6 +170,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     static let sheet = Page.sheet
 
     let page: Page
+    var titleFrame = CGRect.zero
     let canvas = InkCanvas()
     /// Turns the page; the canvas inside it stays upright. A PKCanvasView carrying a rotation itself drops ink tiles it
     /// still needs while zooming, so a turned page blinked blank mid-pinch (v1, 27 Oct sim film at 76°: 58 frames lost
@@ -317,7 +322,6 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         toolDock.layoutMargins = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
         toolDock.translatesAutoresizingMaskIntoConstraints = false
         MapleStyle.surface(toolDock, radius: 19)
-        toolDock.transform = CGAffineTransform(scaleX: 0.75, y: 0.75)
         view.addSubview(toolDock)
         for (index, button) in toolButtons.enumerated() {
             toolDock.addArrangedSubview(button)
@@ -331,14 +335,16 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
                 updateTools()
             }, for: .primaryActionTriggered)
         }
-        let toolbarWidth = toolDock.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width
+        // Same buttons and margins as the Maple pill, so the same height; level with it, centered on the screen.
         NSLayoutConstraint.activate([
-            toolDock.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 72 + toolbarWidth * 0.75 / 2),
-            toolDock.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 38),
+            toolDock.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
+            toolDock.centerYAnchor.constraint(equalTo: controls.centerYAnchor),
         ])
+        marks.statusClear = toolDock
         updateTools()
         view.addInteraction(UIPencilInteraction(delegate: self))  // in the key window: the Pencil's taps reach no other (30 Oct probe)
         toolName.alpha = 0
+        toolName.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .systemFont(ofSize: 18, weight: .semibold))
         toolName.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleBottomMargin]
         view.addSubview(toolName)  // a label takes no touches
         // Resign-active comes before the app switcher can kill us without a background notification.
@@ -530,7 +536,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         toolName.textColor = brushing ? AgentPen.coral : .secondaryLabel
         toolName.sizeToFit()
         let safe = view.safeAreaLayoutGuide.layoutFrame
-        toolName.frame.origin = CGPoint(x: (safe.midX - toolName.bounds.width / 2).rounded(), y: safe.minY + 12)
+        toolName.frame.origin = CGPoint(x: (safe.midX - toolName.bounds.width / 2).rounded(), y: toolDock.frame.maxY + 8)  // under the tools
         toolName.alpha = 1
         UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.28, delay: 1) { self.toolName.alpha = 0 }
         UIAccessibility.post(notification: .announcement, argument: name)

@@ -19,6 +19,8 @@ nonisolated struct Page: Identifiable, Hashable {
     var pictures: URL { url.appending(path: "pictures") }  // what Muse Image painted and the app computed, by file name
     var viewportKey: String { "viewport-\(url.lastPathComponent)" }
     var title: String { name ?? "Untitled page" }
+    /// The name on disk now: the person's, or else Maple's.
+    var savedName: String? { [nameFile, autoNameFile].lazy.compactMap { try? String(contentsOf: $0, encoding: .utf8) }.first }
     /// Maple names a page again once its ink has changed, until the person names it.
     var needsName: Bool { !FileManager.default.fileExists(atPath: nameFile.path) && modified(autoNameFile) < modified(contentFile) }
 
@@ -38,7 +40,7 @@ nonisolated struct Page: Identifiable, Hashable {
         return urls.map { url in
             var page = Page(url: url, edited: .distantPast)
             page.edited = max(modified(page.contentFile), modified(page.notesFile), created(url))
-            page.name = [page.nameFile, page.autoNameFile].lazy.compactMap { try? String(contentsOf: $0, encoding: .utf8) }.first
+            page.name = page.savedName
             return page
         }.sorted { $0.isMe != $1.isMe ? $0.isMe : $0.edited > $1.edited }
     }
