@@ -47,7 +47,7 @@ extension DeviceChecks {
         #expect(gaps.count >= 200, "Loading should leave enough main-thread time for a 60 Hz pinch.")
         #expect(report["p95_ms"]! < 34, "Loading must not stall most zoom frames.")
         for (i, loader) in loaders.enumerated() {
-            #expect(loader.link == nil && loader.layer.contents == nil, "The texture needs no display link or bitmap backing.")
+            #expect(loader.layer.contents == nil, "The texture needs no bitmap backing.")
             #expect(loader.contentScaleFactor == scales[i] && loader.cells.count == 4)
             for (cell, path) in zip(loader.cells, paths[i]) {
                 #expect(path != nil && cell.path === path, "Zoom must reuse the texture paths.")
@@ -55,17 +55,17 @@ extension DeviceChecks {
             let indicator = try #require(loader.indicator)
             #expect(abs(indicator.bounds.width * loader.pageZoom - 40) < 0.01)
             #expect(!loader.isUserInteractionEnabled && !indicator.isUserInteractionEnabled)
-            #expect(loader.texture.animation(forKey: "shimmer") != nil && indicator.link != nil)
+            #expect(loader.texture.animation(forKey: "shimmer") != nil && indicator.scribble.animation(forKey: "chase") != nil)
             loader.isHidden = true
-            #expect(loader.texture.animation(forKey: "shimmer") == nil && indicator.link == nil)
+            #expect(loader.texture.animation(forKey: "shimmer") == nil && indicator.scribble.animation(forKey: "chase") == nil)
             loader.isHidden = false
-            #expect(loader.texture.animation(forKey: "shimmer") != nil && indicator.link != nil)
+            #expect(loader.texture.animation(forKey: "shimmer") != nil && indicator.scribble.animation(forKey: "chase") != nil)
             loader.pause()
             #expect(loader.texture.animation(forKey: "shimmer") == nil)
             loader.resume()
             #expect(loader.texture.animation(forKey: "shimmer") != nil)
             loader.removeFromSuperview()
-            #expect(loader.texture.animation(forKey: "shimmer") == nil && indicator.link == nil)
+            #expect(loader.texture.animation(forKey: "shimmer") == nil && indicator.scribble.animation(forKey: "chase") == nil)
         }
     }
 }

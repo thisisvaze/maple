@@ -1,102 +1,36 @@
-import Metal
 import UIKit
 
-/// Maple's thinking light, drawn in Metal: one soft band of cyan light round a ring, its line and its width wavering on
-/// slow waves, with a sheen travelling round it. "Thinking" is a wide band that breathes; "idle", for the AI button at
-/// rest, a thin, slow ring.
-enum Aura {
-    /// Matches `Uniforms` in the shader. `shape` is the ring's radius and its band's width, in half-sides of the view,
-    /// and how far each wavers, as fractions of them.
-    struct Uniforms {
-        var resolution: SIMD2<Float>
-        var phase: Float
-        var brightness: Float
-        var shape: SIMD4<Float>
-        var dark: Float
-    }
+/// Maple's thinking mark, in its blue pencil: a scribble of small loops round a ring. While thinking, the line draws
+/// itself on round the ring as its tail lifts away behind; at rest, as on the AI button, one lap stays drawn. Either way
+/// it boils between three hand-drawn takes, as a drawn animation does.
+nonisolated enum Scribble {
+    // Calibration knobs, tuned by eye at 24 to 160 px. ring + loop + width / 2 stays under half the side.
+    static let loops = 6
+    static let ring: CGFloat = 0.29, loop: CGFloat = 0.13  // radii, as fractions of the side
+    static let width: CGFloat = 0.04  // the pencil's line, as a fraction of the side
+    static let shown: CGFloat = 0.62  // how much of a lap is drawn at once while thinking
+    static let lap: CFTimeInterval = 1.8  // seconds per lap while thinking
+    static func hold(thinking: Bool) -> CFTimeInterval { thinking ? 0.12 : 0.5 }  // seconds each take holds
 
-    /// Radius, waver, width, width's waver. Calibration knobs, tuned by eye at 24 to 160 px; thinking's edge, 0.58 ×
-    /// 1.08 + 3 × 0.1 × 1.25 ≈ 1.0 half-sides out, is where its faint haze has faded to 1%.
-    static func shape(thinking: Bool) -> SIMD4<Float> { thinking ? [0.58, 0.08, 0.1, 0.25] : [0.42, 0.07, 0.06, 0.25] }
-
-    /// How fast the waves move, radians of phase per second.
-    static func speed(thinking: Bool) -> Float { thinking ? 1.2 : 0.4 }
-
-    static let breath = 1.2  // calibration knob: seconds per breath while thinking
-
-    /// Thinking breathes between 0.8 and 1.6 and back, once a `breath`; idle holds at 1.
-    static func brightness(thinking: Bool, at time: Double) -> Float {
-        guard thinking else { return 1 }
-        return Float(1.2 + 0.4 * sin(2 * .pi * time / breath))
-    }
-
-    static let device = MTLCreateSystemDefaultDevice()
-    static let queue = device?.makeCommandQueue()
-    // ponytail: compiled from source on first use (tens of ms, once); move to a .metal file if launch time matters.
-    static let pipeline: (any MTLRenderPipelineState)? = {
-        guard let device else { return nil }
-        do {
-            let library = try device.makeLibrary(source: source, options: nil)
-            let descriptor = MTLRenderPipelineDescriptor()
-            descriptor.vertexFunction = library.makeFunction(name: "auraVertex")
-            descriptor.fragmentFunction = library.makeFunction(name: "auraFragment")
-            descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
-            return try device.makeRenderPipelineState(descriptor: descriptor)
-        } catch {
-            assertionFailure("Aura shader: \(error)")
-            return nil
+    /// One lap round the ring, centered in `rect`, ending where it began. `take` is 0, 1 or 2: the same scribble by a
+    /// slightly different hand. Only whole harmonics of the lap, so it closes.
+    static func lap(_ take: Int, in rect: CGRect, points: Int = 240) -> [CGPoint] {
+        let side = min(rect.width, rect.height), s = Double(take) * 2.4
+        return (0...points).map { i in
+            let t = Double(i) / Double(points) * 2 * .pi
+            let r = ring * (1 + 0.05 * sin(2 * t + s) + 0.03 * sin(3 * t + 1.7 * s))
+            let l = loop * (1 + 0.14 * sin(5 * t + 0.9 * s))
+            let a = Double(loops) * t + 0.12 * sin(4 * t + s)
+            return CGPoint(x: rect.midX + side * (r * cos(t) + l * cos(a)), y: rect.midY + side * (r * sin(t) + l * sin(a)))
         }
-    }()
-
-    static let source = """
-    #include <metal_stdlib>
-    using namespace metal;
-
-    struct Uniforms { float2 resolution; float phase; float brightness; float4 shape; float dark; };
-
-    constant float3 inner = float3(0.20, 0.86, 0.98);  // cyan, on the band's inside
-    constant float3 outer = float3(0.18, 0.62, 0.98);  // blue, on its outside
-    constant float3 deep = float3(0.04, 0.40, 0.70);   // where the band is brightest, on paper
-
-    // One triangle that covers the view: (-1, -1), (3, -1), (-1, 3).
-    vertex float4 auraVertex(uint id [[vertex_id]]) {
-        return float4(id == 1 ? 3.0 : -1.0, id == 2 ? 3.0 : -1.0, 0.0, 1.0);
     }
 
-    // How far the ring wavers at angle `a`, -1 to 1; `k` picks one of its waves. Only whole harmonics of the angle and
-    // the phase, so it closes round the ring, and the loop has no seam when the phase wraps at 2π.
-    float swing(float a, float phase, float k) {
-        return 0.5 * sin(3.0 * a + phase + 1.9 * k)
-             + 0.3 * sin(5.0 * a - 2.0 * phase + 3.1 * k)
-             + 0.2 * sin(2.0 * a + 3.0 * phase + 0.7 * k);
+    /// Two laps, so the line chasing round starts its next lap without a jump.
+    static func path(_ take: Int, in rect: CGRect) -> CGPath {
+        let one = lap(take, in: rect), path = CGMutablePath()
+        path.addLines(between: one + one.dropFirst())
+        return path
     }
-
-    fragment float4 auraFragment(float4 position [[position]], constant Uniforms &u [[buffer(0)]]) {
-        float2 p = (position.xy - 0.5 * u.resolution) / (0.5 * min(u.resolution.x, u.resolution.y));
-        float r = length(p), a = atan2(p.y, p.x);
-        float radius = u.shape.x, wobble = u.shape.y, width = u.shape.z, uneven = u.shape.w;
-        float center = radius * (1.0 + wobble * swing(a, u.phase, 0.0));
-        float w = width * (1.0 + uneven * swing(a, u.phase, 2.0));
-        float d = (r - center) / w;
-        float d2 = d * d;
-        float body = exp(-d2 * d2);  // flat-topped, so the band has an edge
-        float haze = 0.15 * exp(-0.3 * d2);  // and a faint glow past it
-        float sheen = 0.65 + 0.35 * sin(2.0 * a - u.phase + 1.4 * d);  // brighter folds travel round the ring
-        float3 tint = mix(inner, outer, saturate(0.5 + 0.5 * d));
-        float3 light = tint * (body * sheen + haze) * u.brightness;
-        // Output is premultiplied: color no brighter than its alpha.
-        if (u.dark > 0.5) {
-            float3 glow = 1.0 - exp(-1.8 * light);
-            return float4(glow, max(glow.r, max(glow.g, glow.b)));
-        }
-        // On paper, light can't brighten white, so it shows as tinted ink: its hue at full strength, deepening where
-        // the band is brightest, and its amount as coverage.
-        float peak = max(light.r, max(light.g, light.b));
-        float cover = min(1.0 - exp(-1.8 * peak), 0.92);
-        float3 hue = mix(light / max(peak, 1e-4), deep, saturate(0.5 * (peak - 0.9)));
-        return float4(0.92 * hue * cover, cover);
-    }
-    """
 }
 
 /// Grey cells about a 32nd of the box, with a soft diagonal wave and scattered grain.
@@ -124,24 +58,26 @@ nonisolated enum PixelGrid {
     }
 }
 
-/// A thinking animation: the Aura in an answer's dot, or the pixel grid over a box being drawn in.
+/// A thinking animation: the scribble in an answer's dot, or the pixel grid over a box being drawn in.
 final class Thinking: UIView {
     enum Style { case orb, pixels }
     let style: Style
-    /// Aura's thinking state; false gives its calmer idle one.
-    var thinking = true { didSet { if window == nil { shape = Aura.shape(thinking: thinking) } } }
-    var time = 0.1  // a mid-pulse still frame under Reduce Motion
-    var phase: Float = 0
-    var shape = Aura.shape(thinking: true)
-    var lastFrame = 0.0
-    var link: CADisplayLink?
+    /// The scribble chases round the ring; false holds one lap, as on the AI button at rest.
+    var thinking = true { didSet { if thinking != oldValue { restart() } } }
     var active = UIApplication.shared.applicationState == .active
-    let aura = CAMetalLayer()
+    let scribble = CAShapeLayer()
     let texture = CALayer()
     var cells: [CAShapeLayer] = []
     private var textureSize = CGSize.zero
+    private var scribbleBounds = CGRect.zero
+    private var takes: [CGPath] = []
     var indicator: Thinking?
-    var pageZoom: CGFloat = 1
+    /// The page's zoom on a box being drawn in, so the scribble is drawn sharp at its size on screen.
+    var pageZoom: CGFloat = 1 { didSet { sharpen() } }
+    override var contentScaleFactor: CGFloat { didSet { sharpen() } }
+
+    /// The light-mode blue Maple writes in, and PencilKit's own dark-mode version of it.
+    static let pencil = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0x69 / 255, green: 0x8F / 255, blue: 0xE0 / 255, alpha: 1) : AgentPen.blue }
 
     init(style: Style) {
         self.style = style
@@ -149,10 +85,9 @@ final class Thinking: UIView {
         isOpaque = false
         isUserInteractionEnabled = false
         if style == .orb {
-            aura.device = Aura.device
-            aura.pixelFormat = .bgra8Unorm
-            aura.isOpaque = false
-            layer.addSublayer(aura)
+            (scribble.fillColor, scribble.lineCap, scribble.lineJoin) = (nil, .round, .round)
+            layer.addSublayer(scribble)
+            sharpen()
         } else {
             layer.addSublayer(texture)
             cells = (0..<4).map { _ in
@@ -187,7 +122,13 @@ final class Thinking: UIView {
         super.layoutSubviews()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        aura.frame = bounds
+        scribble.frame = bounds
+        if style == .orb, bounds.width > 0, bounds.height > 0, bounds != scribbleBounds {
+            scribbleBounds = bounds
+            takes = (0..<3).map { Scribble.path($0, in: bounds) }
+            scribble.lineWidth = min(bounds.width, bounds.height) * Scribble.width
+            scribble.removeAllAnimations()  // its takes were for the old size
+        }
         if style == .pixels, bounds.size != textureSize {
             textureSize = bounds.size
             // Four retained shades let Core Animation breathe the texture without repainting it during a pinch.
@@ -200,15 +141,16 @@ final class Thinking: UIView {
         }
         CATransaction.commit()
         let side = min(40 / pageZoom, min(bounds.width, bounds.height) * 0.65)
-        indicator?.pageZoom = pageZoom  // so its drawable matches its size on screen
+        indicator?.pageZoom = pageZoom
         indicator?.frame = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
-        if style == .orb, link == nil { renderOrb() }
+        if style == .orb { animate() }
     }
 
     @objc func pause() { active = false; animate() }
     @objc func resume() { active = true; animate() }
 
-    /// Runs only while shown, in the foreground, and without Reduce Motion, which keeps a still frame.
+    /// Runs only while shown, in the foreground, and without Reduce Motion, which keeps one lap still. All of it is
+    /// Core Animation's: no display link, and nothing redrawn on the main thread.
     @objc func animate() {
         let running = window != nil && !isHidden && active && !UIAccessibility.isReduceMotionEnabled
         if style == .pixels {
@@ -224,31 +166,41 @@ final class Thinking: UIView {
             } else if !running { texture.removeAnimation(forKey: "shimmer") }
             return
         }
-        if running, link == nil {
-            lastFrame = 0
-            let link = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick))
-            let rate: Float = 60
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: rate, preferred: rate)
-            link.add(to: .main, forMode: .common)
-            self.link = link
-        } else if !running {
-            link?.invalidate()
-            link = nil
+        guard !takes.isEmpty else { return }
+        let chasing = running && thinking
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        (scribble.path, scribble.strokeStart, scribble.strokeEnd) = (takes[0], 0, chasing ? Scribble.shown / 2 : 0.5)
+        if !running { scribble.removeAllAnimations() }
+        if running, scribble.animation(forKey: "boil") == nil {
+            let boil = CAKeyframeAnimation(keyPath: "path")
+            boil.values = takes
+            boil.calculationMode = .discrete
+            boil.duration = Scribble.hold(thinking: thinking) * Double(takes.count)
+            boil.repeatCount = .infinity
+            scribble.add(boil, forKey: "boil")
         }
-        renderOrb()
+        // The path holds two laps: drawing from one lap's point to the same point a lap on loops without a seam.
+        if chasing, scribble.animation(forKey: "chase") == nil {
+            let start = CABasicAnimation(keyPath: "strokeStart"), end = CABasicAnimation(keyPath: "strokeEnd")
+            (start.fromValue, start.toValue) = (0, 0.5)
+            (end.fromValue, end.toValue) = (Scribble.shown / 2, 0.5 + Scribble.shown / 2)
+            let chase = CAAnimationGroup()
+            chase.animations = [start, end]
+            chase.duration = Scribble.lap
+            chase.repeatCount = .infinity
+            scribble.add(chase, forKey: "chase")
+        }
+        CATransaction.commit()
     }
 
-    func tick(_ link: CADisplayLink) {
-        if lastFrame > 0 {
-            let step = min(link.timestamp - lastFrame, 0.05)
-            time += step
-            // The waves only turn by whole multiples of the phase, so it wraps without a seam and keeps float precision.
-            phase = (phase + Float(step) * Aura.speed(thinking: thinking)).truncatingRemainder(dividingBy: 2 * .pi)
-            shape += (Aura.shape(thinking: thinking) - shape) * Float(min(1, step * 6))  // settles in about 0.5 s
-        }
-        lastFrame = link.timestamp
-        renderOrb()
+    /// Starts again for a new state: thinking chases and boils fast, at rest it holds a lap and boils slowly.
+    private func restart() {
+        scribble.removeAllAnimations()
+        animate()
     }
+
+    private func sharpen() { scribble.contentsScale = contentScaleFactor * pageZoom }
 
     /// The texture scales as vector paths; zoom never allocates or redraws a page-sized bitmap.
     func place(over box: CGRect, turn: CGFloat, zoom: CGFloat) {
@@ -259,7 +211,10 @@ final class Thinking: UIView {
     }
 
     private func updateColors() {
-        guard style == .pixels else { renderOrb(); return }
+        guard style == .pixels else {
+            scribble.strokeColor = Self.pencil.resolvedColor(with: traitCollection).cgColor
+            return
+        }
         backgroundColor = .paper.withAlphaComponent(0.6)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -267,39 +222,5 @@ final class Thinking: UIView {
             cell.fillColor = UIColor.secondaryLabel.resolvedColor(with: traitCollection).withAlphaComponent((0.055 + Double(i) * 0.04) * 0.3).cgColor
         }
         CATransaction.commit()
-    }
-
-    /// Draws one frame at the orb's size on screen; a page zoom on the box being drawn in doesn't resize it.
-    func renderOrb() {
-        guard style == .orb, let pipeline = Aura.pipeline else { return }
-        let scale = contentScaleFactor * pageZoom
-        let size = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
-        guard size.width > 0, size.height > 0 else { return }
-        if aura.drawableSize != size { aura.drawableSize = size }
-        guard let drawable = aura.nextDrawable(), let buffer = Aura.queue?.makeCommandBuffer() else { return }
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
-        pass.colorAttachments[0].loadAction = .dontCare  // the shader writes every pixel
-        pass.colorAttachments[0].storeAction = .store
-        guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
-        var uniforms = Aura.Uniforms(resolution: [Float(size.width), Float(size.height)], phase: phase,
-                                     brightness: Aura.brightness(thinking: thinking, at: time), shape: shape,
-                                     dark: traitCollection.userInterfaceStyle == .dark ? 1 : 0)
-        encoder.setRenderPipelineState(pipeline)
-        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Aura.Uniforms>.stride, index: 0)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        encoder.endEncoding()
-        buffer.present(drawable)
-        buffer.commit()
-    }
-
-    /// The display link holds its target strongly; this keeps it from keeping a removed view alive.
-    final class Tick: NSObject {
-        weak var view: Thinking?
-        init(_ view: Thinking) { self.view = view }
-        @objc func tick(_ link: CADisplayLink) {
-            guard let view else { return link.invalidate() }
-            view.tick(link)
-        }
     }
 }

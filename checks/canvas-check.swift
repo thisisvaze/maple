@@ -332,27 +332,24 @@ struct Check {
     }
 
     static func interface() throws {
-        precondition(Aura.pipeline != nil, "the Aura shader compiles")
-        for time in stride(from: 0.0, through: 20, by: 0.05) {
-            precondition((0.7999...1.6001).contains(Aura.brightness(thinking: true, at: time)) && Aura.brightness(thinking: false, at: time) == 1)
+        // Each take of the scribble ends where it began, so the chase loops without a jump, and stays inside its square.
+        let square = CGRect(x: 0, y: 0, width: 100, height: 100), reach = Scribble.width * 100 / 2
+        for take in 0..<3 {
+            let lap = Scribble.lap(take, in: square)
+            precondition(hypot(lap[0].x - lap.last!.x, lap[0].y - lap.last!.y) < 1e-6, "take \(take) closes")
+            precondition(lap.allSatisfy(square.insetBy(dx: reach, dy: reach).contains), "take \(take) stays inside its orb, line and all")
         }
-        let breath = Aura.breath
-        precondition(abs(Aura.brightness(thinking: true, at: breath / 4) - 1.6) < 0.001 && abs(Aura.brightness(thinking: true, at: breath * 3 / 4) - 0.8) < 0.001,
-                     "thinking breathes 0.8 to 1.6 and back once a breath")
         for size: CGFloat in [24, 34, 40] {
             let orb = Thinking(style: .orb)
             orb.frame.size = CGSize(width: size, height: size)
             orb.layoutIfNeeded()
-            orb.renderOrb()
-            precondition(orb.aura.frame == orb.bounds && orb.aura.drawableSize.width == (size * orb.contentScaleFactor).rounded(),
-                         "the Aura draws at its size on screen")
+            precondition(orb.scribble.frame == orb.bounds && orb.scribble.path != nil && abs(orb.scribble.lineWidth - size * Scribble.width) < 0.001
+                         && orb.scribble.strokeStart == 0 && orb.scribble.strokeEnd == 0.5, "one whole lap at every size, held still off screen")
         }
         let loader = Thinking(style: .pixels)
         loader.place(over: CGRect(x: 0, y: 0, width: 600, height: 400), turn: 0, zoom: 2)
         loader.layoutIfNeeded()
-        loader.indicator!.layoutIfNeeded()
-        precondition(loader.indicator!.aura.drawableSize.width == (40 * loader.indicator!.contentScaleFactor).rounded(),
-                     "a zoomed page doesn't resize the indicator's drawable")
+        precondition(loader.indicator!.scribble.contentsScale == loader.indicator!.contentScaleFactor * 2, "a zoomed page keeps the indicator's scribble sharp")
         let button = MapleButton(minimumWidth: 160)
         let presentations: [(String, MapleButton.Mark, String)] = [("Record", .symbol("mic"), ""), ("Allow mic", .loading, "×"), ("Recording", .waveform, "0:08"), ("Release to send", .symbol("arrow.up"), ""), ("Transcribing", .loading, "×"), ("Thinking", .orb, "×")]
         var widths: [CGFloat] = []
@@ -397,12 +394,12 @@ struct Check {
         precondition(controller.soundMaterial == .pencil, "disabling edits restores the pencil sound with the pen")
         controller.setAIEnabled(true)
         precondition(controller.toolButtons[2].isEnabled && !controller.aiButton.orb.isHidden)
-        precondition(!controller.aiButton.orb.thinking, "the AI button's Aura idles at rest")
+        precondition(!controller.aiButton.orb.thinking && controller.aiButton.orb.scribble.animation(forKey: "chase") == nil, "the AI button's scribble rests")
         controller.cycle()
         precondition(controller.soundMaterial == .eraser)
         controller.cycle()
         precondition(controller.soundMaterial == .edit, "Pencil double-tap uses the same sound routing")
-        print("interface ok: Aura shader and pulse, idle AI button, stable voice states, touch targets, tool dock, AI toggle and adjacent status")
+        print("interface ok: scribble laps, sizes and sharpness, resting AI button, stable voice states, touch targets, tool dock, AI toggle and adjacent status")
     }
 
     static func voicePlacement() throws {
