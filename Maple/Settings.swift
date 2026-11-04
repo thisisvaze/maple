@@ -1,3 +1,4 @@
+import AuthenticationServices
 import SwiftUI
 
 struct SettingsPanel: View {
@@ -20,6 +21,10 @@ struct SettingsPanel: View {
     @AppStorage("pencilVolume") private var pencilVolume = 1.0
     @AppStorage("perfectShapes") private var perfectShapes = true
     @AppStorage("voiceInput") private var voiceInput = false
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
+    @State private var gmail = Gmail.account?.email
+    @State private var connecting = false
+    @State private var gmailFailed = false
     @State var guide = false
 
     var body: some View {
@@ -134,6 +139,50 @@ struct SettingsPanel: View {
                 Text("Hold an Apple Pencil Pro squeeze, speak, then release to send. You can also tap the microphone. Recordings go to Meta to transcribe and answer on your page, up to one minute at a time.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                heading("Connections")
+                HStack {
+                    Label("Gmail", systemImage: "envelope")
+                    Spacer()
+                    if gmail == nil {
+                        Button("Connect") { Task { await connectGmail() } }
+                            .disabled(Gmail.clientID.isEmpty || connecting)
+                            .accessibilityLabel("Connect Gmail")
+                    } else {
+                        Button("Disconnect", role: .destructive) { Task { await Gmail.disconnect(); gmail = nil } }
+                            .accessibilityLabel("Disconnect Gmail")
+                    }
+                }
+                .frame(minHeight: 44)
+                Text((gmail.map { "Connected as \($0). " } ?? "") + "Maple can search your mail to answer a question, like a flight time or a receipt total. It only reads, and the emails it reads go to Meta with your question.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if gmailFailed {
+                    Text("Couldn't connect to Gmail. Try again.").font(.footnote).foregroundStyle(.red)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Connections.Kind.allCases) { ConnectionToggle(kind: $0) }
+                Text("Maple can look through these to answer a question, like when you're free on Thursday or the total on a receipt you photographed. It only reads, and what it reads goes to Meta with your question.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func connectGmail() async {
+        let signIn = Gmail.signIn()
+        connecting = true
+        defer { connecting = false }
+        do {
+            let callback = try await webAuthenticationSession.authenticate(using: signIn.url, callback: .customScheme(Gmail.scheme), additionalHeaderFields: [:])
+            gmail = try await Gmail.connect(callback, signIn)
+            gmailFailed = false
+        } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
+        } catch {
+            gmailFailed = true
         }
     }
 
@@ -206,3 +255,35 @@ struct SettingsPanel: View {
     }
 }
 
+/// Turns on one of the iPad's own connections, asking iPadOS for access the first time.
+private struct ConnectionToggle: View {
+    let kind: Connections.Kind
+    @AppStorage private var on: Bool
+    @State private var denied = false
+    @Environment(\.openURL) private var openURL
+
+    init(kind: Connections.Kind) {
+        self.kind = kind
+        _on = AppStorage(wrappedValue: false, kind.key)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(get: { on && kind.authorized }, set: { wanted in Task { await turn(wanted) } })) {
+                Label(kind.rawValue, systemImage: kind.symbol)
+            }
+            .frame(minHeight: 44)
+            if denied {
+                Button("Maple can't see your \(kind.rawValue.lowercased()). Turn on access in the Settings app.") {
+                    openURL(URL(string: UIApplication.openSettingsURLString)!)
+                }
+                .font(.footnote)
+            }
+        }
+    }
+
+    private func turn(_ wanted: Bool) async {
+        on = wanted ? await kind.requestAccess() : false
+        denied = wanted && !on
+    }
+}

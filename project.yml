@@ -18,7 +18,12 @@ targets:
         CFBundleDisplayName: Maple
         MODEL_API_KEY: $(MODEL_API_KEY)
         TYPESAFE_API_KEY: $(TYPESAFE_API_KEY)
+        GOOGLE_CLIENT_ID: $(GOOGLE_CLIENT_ID)
         NSMicrophoneUsageDescription: Ask out loud by squeezing Apple Pencil Pro or tapping the microphone. Your recording goes to Meta to transcribe and answer it.
+        NSCalendarsFullAccessUsageDescription: Maple reads your calendar to answer questions on your page, like when you're free. What it reads goes to Meta with your question.
+        NSRemindersFullAccessUsageDescription: Maple reads your reminders to answer questions on your page, like what's left on a list. What it reads goes to Meta with your question.
+        NSContactsUsageDescription: Maple looks up people you ask about, like a phone number or a birthday. What it reads goes to Meta with your question.
+        NSPhotoLibraryUsageDescription: Maple looks at photos you ask about, like a whiteboard or a receipt. The photos it looks at go to Meta with your question.
         UILaunchScreen: {}
         UIAppFonts: [Handlee-Regular.ttf]
         UIApplicationSceneManifest:

@@ -54,6 +54,10 @@ Voice uses the [file transcription endpoint](https://dev.meta.ai/docs/speech-to-
 
 The **Maple on / Maple off** button beside Record pauses everything Maple does: mark recognition, answers, drawings, edits, voice, page naming and reading the Me page. It cancels requests and discards answers waiting to land; existing ink and answers stay. The setting persists across pages and launches. Drawing, erasing, perfect shapes, saving and undo remain available. Record stays visible but disabled while Maple is off.
 
+## Connections
+
+Off by default, in the gallery's Settings: Gmail, Calendar, Reminders, Contacts and Photos. When one is on, Spark can look through it while it answers a ? or a spoken question: `search_email`, `find_events`, `find_reminders`, `find_contacts` and `find_photos`. Ask "when does my flight leave?" or "what was the total on Tuesday's receipt?" and the answer lands beside your mark. Maple only reads, never changes anything. Photos go to Spark as pictures, up to 4 at a time at 1024 px, so it can read a whiteboard or a receipt. Calendar, Reminders, Contacts and Photos use iPadOS's own permission, asked the first time you turn one on; Gmail signs in with Google. What Spark reads goes to Meta with your question.
+
 ## Maple remembers
 
 Every model call reads what Maple remembers about you, on every page. An answer only proposes a memory: plain code checks that each claim quotes your own words, that it isn't new wording of something you struck, and that nothing you wrote gets changed, then commits and logs it. "Noted: Is a nurse" shows for a moment. The Me page, opened from its own button at the top of the gallery, shows it all in ink: strike a line and it's forgotten at once, undo brings it back, and whatever you write there stands in your own words. It stays on the iPad in `memory.json`, and goes to Meta with each model call.
@@ -99,6 +103,8 @@ xcodegen
 open Maple.xcodeproj
 ```
 
+To let Maple search Gmail, turn on the Gmail API in a Google Cloud project, make an OAuth client of type iOS for the bundle ID `dev.maple.muse`, and add `GOOGLE_CLIENT_ID = <client ID>` to Secrets.xcconfig. While the consent screen is in testing, add each Google account that will connect as a test user. Then connect in Settings. Maple asks only to read mail, and the sign-in stays in the iPad's Keychain.
+
 The app reads the keys from its Info.plist, so they end up inside the built app. That's fine for a demo on your own iPad. Move the calls behind a server before you distribute it.
 
 ## Checks
@@ -115,6 +121,7 @@ swiftc -swift-version 6 -parse-as-library Maple/Hershey.swift Maple/Handwriting.
 swiftc -swift-version 6 -O -parse-as-library Maple/Room.swift checks/room-check.swift -o /tmp/room-check && /tmp/room-check
 swiftc -swift-version 6 -parse-as-library Maple/{Transcribe,Muse,Memory,Agent,Drawing,Figure,Computed,Hershey}.swift checks/voice-check.swift -o /tmp/voice-check && /tmp/voice-check
 swiftc -swift-version 6 -parse-as-library Maple/{Muse,Memory,Agent,Drawing,Figure,Computed,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
+swiftc -swift-version 6 -parse-as-library Maple/{Gmail,Muse}.swift checks/gmail-check.swift -o /tmp/gmail-check && /tmp/gmail-check
 swiftc -swift-version 6 -parse-as-library Maple/{Muse,MuseImage,Memory,Agent,Drawing,Figure,Computed,Hershey,Jev}.swift checks/live-check.swift -o /tmp/live-check
 MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]   # Jev reads marks; Muse answers, draws, edits a drawing and an answer
 ```

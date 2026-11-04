@@ -11,12 +11,15 @@ struct Check {
         defer { URLProtocol.unregisterClass(MuseStub.self) }
 
         // calculate evaluates with Plot's grammar and says when it can't.
-        func calculate(_ expression: String) throws -> String {
-            try Agent.calculate.run(try JSONEncoder().encode(["expression": expression]))
+        func calculate(_ expression: String) async throws -> String {
+            guard case .text(let value)? = try await Agent.calculate.run(try JSONEncoder().encode(["expression": expression])).first else { return "" }
+            return value
         }
-        let values = try ["17.3*2.9+sqrt(41)", "2^10", "1/0"].map(calculate)
+        var values: [String] = []
+        for expression in ["17.3*2.9+sqrt(41)", "2^10", "1/0"] { values.append(try await calculate(expression)) }
         precondition(values == ["56.57312424", "1024", "undefined"], "calculate: \(values)")
-        precondition((try? calculate("2x")) == nil, "a formula outside the grammar is refused, never run")
+        let refused = try? await calculate("2x")
+        precondition(refused == nil, "a formula outside the grammar is refused, never run")
 
         // A round of calls: Muse asks, Maple answers with the computed value, and Muse's final message is the reply. The
         // commentary before the call is not part of it.
@@ -75,8 +78,16 @@ struct Check {
                               (#"{"reply": "• Done."}"#, "Done."), (#"{"reply": "done", "passage": false}"#, "done")] {
             precondition(Agent.partialReply(json) == reply, "partial reply of \(json): \(Agent.partialReply(json))")
         }
+        // A function that answers with a picture sends content parts, so Muse sees the photo itself.
+        let look = Muse.Function(name: "lookup", description: "Shows a photo.", parameters: #"{"type": "object", "additionalProperties": false, "properties": {}}"#) { _ in
+            [.text("Taken Fri 2026-11-06 13:00:"), .jpeg(Data([0xFF, 0xD8, 0xFF]))]
+        }
+        let before = MuseStub.bodies.count
+        _ = try await Muse(key: "unknown").respond([.text("What's on the whiteboard?")], functions: [look])
+        let shown = (MuseStub.bodies[before + 1]["input"] as! [[String: Any]]).last!["output"] as! [[String: String]]
+        precondition(shown.map { $0["type"]! } == ["input_text", "input_image"] && shown[1]["image_url"] == "data:image/jpeg;base64,/9j/", "\(shown)")
 
-        print("muse ok: calculate, function-call rounds, last message, search, unknown function, endless calls, page name, ?? to Wonder, streaming")
+        print("muse ok: calculate, pictures from a function, function-call rounds, last message, search, unknown function, endless calls, page name, ?? to Wonder, streaming")
     }
 }
 

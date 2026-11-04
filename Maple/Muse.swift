@@ -6,6 +6,7 @@ nonisolated struct Muse: Sendable {
     enum Part: Sendable {
         case text(String)
         case png(Data)
+        case jpeg(Data)
     }
 
     /// The API defaults to high, which spent 662 reasoning tokens on "say hi" (28 Oct). Raise it only where thinking pays.
@@ -19,13 +20,13 @@ nonisolated struct Muse: Sendable {
         var called: [String] = []  // the functions it called, in order
     }
 
-    /// A function Muse may call. Maple runs it on the device and sends back what it returns; an error goes back as text,
-    /// so Muse can try again or answer without it.
+    /// A function Muse may call. Maple runs it on the device and sends back what it returns, text and any pictures; an
+    /// error goes back as text, so Muse can try again or answer without it.
     struct Function: Sendable {
         let name: String
         let description: String
         let parameters: String  // JSON Schema for its arguments, in the strict subset
-        let run: @Sendable (Data) throws -> String
+        let run: @Sendable (Data) async throws -> [Part]
     }
 
     struct Failure: LocalizedError {
@@ -50,13 +51,7 @@ nonisolated struct Muse: Sendable {
     /// each piece arrives.
     func respond(_ parts: [Part], instructions: String? = nil, schema: Data? = nil, effort: Effort = .minimal, maxOutputTokens: Int = 4000,
                  search: Bool = false, functions: [Function] = [], progress: (@Sendable (_ thinking: String, _ text: String) -> Void)? = nil) async throws -> Reply {
-        let content: [[String: String]] = parts.map {
-            switch $0 {
-            case .text(let text): ["type": "input_text", "text": text]
-            case .png(let data): ["type": "input_image", "image_url": "data:image/png;base64," + data.base64EncodedString()]
-            }
-        }
-        var input: [Any] = [["type": "message", "role": "user", "content": content]]
+        var input: [Any] = [["type": "message", "role": "user", "content": Self.content(parts)]]
         var body: [String: Any] = [
             "model": model,
             "reasoning": progress == nil ? ["effort": effort.rawValue] : ["effort": effort.rawValue, "summary": "auto"],
@@ -91,9 +86,12 @@ nonisolated struct Muse: Sendable {
             input += items
             for call in calls {
                 let name = call["name"] as? String ?? "", arguments = Data((call["arguments"] as? String ?? "{}").utf8)
-                let output: String
+                let output: Any  // text alone goes as a string; with pictures, as content parts
                 if let function = functions.first(where: { $0.name == name }) {
-                    do { output = try function.run(arguments) } catch { output = "error: \(error.localizedDescription)" }
+                    do {
+                        let parts = try await function.run(arguments)
+                        if parts.count == 1, case .text(let text) = parts[0] { output = text } else { output = Self.content(parts) }
+                    } catch { output = "error: \(error.localizedDescription)" }
                 } else {
                     output = "error: there's no function \(name)"
                 }
@@ -102,6 +100,16 @@ nonisolated struct Muse: Sendable {
             }
         }
         throw Failure("Muse kept calling functions without answering")
+    }
+
+    static func content(_ parts: [Part]) -> [[String: String]] {
+        parts.map {
+            switch $0 {
+            case .text(let text): ["type": "input_text", "text": text]
+            case .png(let data): ["type": "input_image", "image_url": "data:image/png;base64," + data.base64EncodedString()]
+            case .jpeg(let data): ["type": "input_image", "image_url": "data:image/jpeg;base64," + data.base64EncodedString()]
+            }
+        }
     }
 
     /// The response as JSON. Streamed, with `progress`, it's read from the server-sent events as they come, and the

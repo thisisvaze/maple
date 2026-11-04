@@ -1,4 +1,6 @@
-// Your keys go in Secrets.xcconfig (gitignored): MODEL_API_KEY = <Meta Model API key>, TYPESAFE_API_KEY = <TypeSafe key for Jev>
+// Your keys go in Secrets.xcconfig (gitignored): MODEL_API_KEY = <Meta Model API key>, TYPESAFE_API_KEY = <TypeSafe key for Jev>,
+// GOOGLE_CLIENT_ID = <iOS OAuth client ID from Google Cloud, for Gmail>
 MODEL_API_KEY =
 TYPESAFE_API_KEY =
+GOOGLE_CLIENT_ID =
 #include? "Secrets.xcconfig"

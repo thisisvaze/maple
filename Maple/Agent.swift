@@ -29,7 +29,7 @@ nonisolated struct Agent: Sendable {
         """) { arguments in
         struct Arguments: Decodable { var expression: String }
         let value = try Plot.function(try JSONDecoder().decode(Arguments.self, from: arguments).expression)(0)
-        return value.isFinite ? String(format: "%.10g", value) : "undefined"
+        return [.text(value.isFinite ? String(format: "%.10g", value) : "undefined")]
     }
 
     /// A box Muse asks for out loud, in screen points, to be filled as if the person had drawn it under `request`.
@@ -54,7 +54,7 @@ nonisolated struct Agent: Sendable {
             let box = try JSONDecoder().decode(Box.self, from: arguments)
             guard !box.request.isEmpty, box.width.isFinite, box.height.isFinite, box.width > 0, box.height > 0 else { throw Muse.Failure("request, width and height are needed") }
             asked.boxes.withLock { $0.append(box) }
-            return "The box is on its way to the page and fills in a few seconds. Leave reply empty unless they asked something else too."
+            return [.text("The box is on its way to the page and fills in a few seconds. Leave reply empty unless they asked something else too.")]
         }
     }
 
@@ -113,10 +113,10 @@ nonisolated struct Agent: Sendable {
 
     /// `near` is a close-up with the new mark in red; `around` is the working area. `gesture` is "question",
     /// "double_question", "equals", "dots", "bullet" or "double_dot", or "voice" with a transcript in `speech`. `target` is the
-    /// earlier answer the mark sits beside, if any.
+    /// earlier answer the mark sits beside, if any. `tools` are more functions Muse may call, like Gmail's search.
     /// With `progress`, the answer streams: Muse's summary of its thinking, and the reply so far, as each piece arrives.
     func ask(near: Data, around: Data, gesture: String, threads: [Thread], target: String?, speech: String? = nil, memory: [Memory.Line] = [],
-             progress: (@Sendable (_ thinking: String, _ reply: String) -> Void)? = nil) async throws -> Answer {
+             tools: [Muse.Function] = [], progress: (@Sendable (_ thinking: String, _ reply: String) -> Void)? = nil) async throws -> Answer {
         struct Context: Encodable { var gesture: String, target: String?, threads: [Thread], speech: String?, memory: [Memory.Line] }
         let context = String(decoding: try JSONEncoder().encode(Context(gesture: gesture, target: target, threads: threads, speech: speech, memory: memory)), as: UTF8.self)
         let asked = Asked(), deep = gesture == "double_question"
@@ -126,7 +126,7 @@ nonisolated struct Agent: Sendable {
         if let progress { streaming = { thinking, text in progress(thinking, Self.partialReply(text)) } }
         let reply = try await muse.respond([.png(near), .png(around), .text(context)], instructions: Self.instructions, schema: Self.schema,
                                            effort: deep ? Self.deep.effort : .minimal, maxOutputTokens: deep ? 16_000 : 4000,
-                                           search: true, functions: gesture == "voice" ? [Self.calculate, Self.drawBox(asked)] : [Self.calculate],
+                                           search: true, functions: (gesture == "voice" ? [Self.calculate, Self.drawBox(asked)] : [Self.calculate]) + tools,
                                            progress: streaming)
         var answer = try JSONDecoder().decode(Answer.self, from: Data(reply.text.utf8))
         (answer.searched, answer.calculated) = (reply.searched, reply.called.filter { $0 == "calculate" }.count)
