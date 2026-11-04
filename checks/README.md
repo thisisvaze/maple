@@ -28,4 +28,4 @@ The edit checks also cover moving and resizing two generated objects together on
 
 29 Oct, minimal effort: the ? answered in 2.6–2.9 s, a double dot in 3.8 s, the Gettysburg Address as exact text in 5.2 s; an edit relabeling a drawing's button took 4.7 s and rewriting an answer 6.4 s.
 
-3 Nov: "why is e^iπ = −1 ??" was answered by Muse Wonder at medium effort in 15 to 18 s.
+3 Nov: "why is e^iπ = −1 ??" was answered by Muse Wonder at medium effort in 15 to 18 s. Streamed through Agent.ask on the Mac, the same ?? finished in 10.1 s, first reply text at 9.7 s: the wait is Wonder's reasoning, and the stream only shows the answer's last 0.3 s early.

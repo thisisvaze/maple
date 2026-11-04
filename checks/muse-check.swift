@@ -1,7 +1,8 @@
-// Offline: Muse's function-call rounds, the answer taken from the last message, web search, Agent's calculate tool and page names,
-// against a URLProtocol stub that plays the API's side.
+// Offline: Muse's function-call rounds, the answer taken from the last message, web search, Agent's calculate tool, page names
+// and streaming, against a URLProtocol stub that plays the API's side.
 //   swiftc -swift-version 6 -parse-as-library Maple/{Muse,Memory,Agent,Drawing,Figure,Computed,Hershey}.swift checks/muse-check.swift -o /tmp/muse-check && /tmp/muse-check
 import Foundation
+import Synchronization
 
 @main
 struct Check {
@@ -57,7 +58,25 @@ struct Check {
             precondition(answer.reply == (gesture == "double_question" ? "375 g" : ". 375 g") && body["model"] as? String == model && (body["reasoning"] as? [String: String])?["effort"] == effort,
                          "\(gesture) asks \(body["model"] ?? "") at \(body["reasoning"] ?? "")")
         }
-        print("muse ok: calculate, function-call rounds, last message, search, unknown function, endless calls, page name, ?? to Wonder")
+        // Streamed, the answer builds up as it comes: Muse's summary of its thinking, then the final message's reply from
+        // its "reply" key on, and the whole answer is the same as a plain call's. Rounds of calls stream the same way.
+        let seen = Mutex<[(thinking: String, reply: String)]>([])
+        let streamed = try await Agent(muse: Muse(key: "answer")).ask(near: Data(), around: Data(), gesture: "double_question", threads: [], target: nil) { thinking, reply in
+            seen.withLock { $0.append((thinking, reply)) }
+        }
+        let streaming = MuseStub.bodies.last!
+        precondition(streaming["stream"] as? Bool == true && (streaming["reasoning"] as? [String: String])?["summary"] == "auto", "a stream asks for a summary")
+        let pieces = seen.withLock { $0 }
+        precondition(streamed.reply == "375 g" && pieces.last?.reply == "375 g" && pieces.first?.thinking == "Working it out.", "streamed: \(pieces)")
+        precondition(pieces.contains { !$0.reply.isEmpty && $0.reply != "375 g" && "375 g".hasPrefix($0.reply) }, "the reply comes in pieces: \(pieces.map(\.reply))")
+        let rounds = try await Muse(key: "calls").respond([.text("What is 17.3 * 2.9 + sqrt(41)?")], search: true, functions: [Agent.calculate]) { _, _ in }
+        precondition(rounds.text == #"{"reply": "56.57312424"}"# && rounds.called == ["calculate"], "streamed rounds: \(rounds.text)")
+        for (json, reply) in [(#"{"confidence": "high", "reading": "x"#, ""), (#"{"reading": "x", "reply": "Say \"hi\", 2\"#, #"Say "hi", 2"#),
+                              (#"{"reply": "• Done."}"#, "Done."), (#"{"reply": "done", "passage": false}"#, "done")] {
+            precondition(Agent.partialReply(json) == reply, "partial reply of \(json): \(Agent.partialReply(json))")
+        }
+
+        print("muse ok: calculate, function-call rounds, last message, search, unknown function, endless calls, page name, ?? to Wonder, streaming")
     }
 }
 
@@ -88,10 +107,26 @@ nonisolated final class MuseStub: URLProtocol, @unchecked Sendable {
         }
         let json = #"{"status":"completed","output":[\#(output.joined(separator: ","))],"usage":{"output_tokens":10}}"#
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(json.utf8))
+        client?.urlProtocol(self, didLoad: Data((body["stream"] as? Bool == true ? Self.streamed(output, json) : json).utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+
+    /// The same output as server-sent events: a summary line, each message's text three characters at a time, then the
+    /// whole response.
+    static func streamed(_ output: [String], _ json: String) -> String {
+        var events = [#"{"type":"response.reasoning_summary_text.delta","delta":"Working it out."}"#]
+        for item in output.compactMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }) where item["type"] as? String == "message" {
+            events.append(#"{"type":"response.output_item.added","item":{"type":"message"}}"#)
+            let text = (item["content"] as! [[String: Any]])[0]["text"] as! String
+            for start in stride(from: 0, to: text.count, by: 3) {
+                let piece = String(decoding: try! JSONEncoder().encode(String(text.dropFirst(start).prefix(3))), as: UTF8.self)
+                events.append(#"{"type":"response.output_text.delta","delta":\#(piece)}"#)
+            }
+        }
+        events.append(#"{"type":"response.completed","response":\#(json)}"#)
+        return events.map { "event: e\ndata: \($0)\n\n" }.joined() + "data: [DONE]\n\n"
+    }
 
     static func read(_ request: URLRequest) -> Data {
         if let body = request.httpBody { return body }

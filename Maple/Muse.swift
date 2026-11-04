@@ -45,9 +45,11 @@ nonisolated struct Muse: Sendable {
     }
 
     /// `schema` (JSON Schema, strict subset) makes the reply text a JSON object that matches it. With `search`, Muse may
-    /// search the web first; with `functions`, it may call them, each round's calls answered before it goes on.
+    /// search the web first; with `functions`, it may call them, each round's calls answered before it goes on. With
+    /// `progress`, the answer streams: it gets Muse's summary of its thinking and the message being written, so far, as
+    /// each piece arrives.
     func respond(_ parts: [Part], instructions: String? = nil, schema: Data? = nil, effort: Effort = .minimal, maxOutputTokens: Int = 4000,
-                 search: Bool = false, functions: [Function] = []) async throws -> Reply {
+                 search: Bool = false, functions: [Function] = [], progress: (@Sendable (_ thinking: String, _ text: String) -> Void)? = nil) async throws -> Reply {
         let content: [[String: String]] = parts.map {
             switch $0 {
             case .text(let text): ["type": "input_text", "text": text]
@@ -57,11 +59,12 @@ nonisolated struct Muse: Sendable {
         var input: [Any] = [["type": "message", "role": "user", "content": content]]
         var body: [String: Any] = [
             "model": model,
-            "reasoning": ["effort": effort.rawValue],
+            "reasoning": progress == nil ? ["effort": effort.rawValue] : ["effort": effort.rawValue, "summary": "auto"],
             "max_output_tokens": maxOutputTokens,
             "store": false,  // Maple keeps its own threads; nothing needs to live on Meta's side
         ]
         if let instructions { body["instructions"] = instructions }
+        if progress != nil { body["stream"] = true }
         if let schema {
             body["text"] = ["format": ["type": "json_schema", "name": "answer", "strict": true, "schema": try JSONSerialization.jsonObject(with: schema)]]
         }
@@ -76,7 +79,7 @@ nonisolated struct Muse: Sendable {
         var searched = false, called: [String] = []
         for _ in 0...Self.maxCalls {
             body["input"] = input
-            let data = try await post(body)
+            let data = try await post(body, progress: progress)
             let items = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["output"] as? [[String: Any]] ?? []
             searched = searched || items.contains { $0["type"] as? String == "web_search_call" }
             let calls = items.filter { $0["type"] as? String == "function_call" }
@@ -101,19 +104,54 @@ nonisolated struct Muse: Sendable {
         throw Failure("Muse kept calling functions without answering")
     }
 
-    private func post(_ body: [String: Any]) async throws -> Data {
+    /// The response as JSON. Streamed, with `progress`, it's read from the server-sent events as they come, and the
+    /// `response.completed` event's response is what a plain call returns.
+    private func post(_ body: [String: Any], progress: (@Sendable (String, String) -> Void)?) async throws -> Data {
         var request = URLRequest(url: Self.endpoint, timeoutInterval: 120)  // high effort can think for 30 s or more
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else {
-            let message = (try? Self.decoder.decode(Response.self, from: data).error?.message) ?? String(decoding: data.prefix(300), as: UTF8.self)
-            throw Failure("Muse returned \(status): \(message)")
+        guard let progress else {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let status = (response as? HTTPURLResponse)?.statusCode, status == 200 else { throw Self.failure(response, data) }
+            return data
         }
-        return data
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            var data = Data()
+            for try await byte in bytes { data.append(byte) }
+            throw Self.failure(response, data)
+        }
+        // Each event is one `data:` line of JSON, as Meta sends them. The text being written grows by its deltas and
+        // starts over with each new message item, so commentary before a call is never taken for the answer.
+        var thinking = "", text = ""
+        for try await line in bytes.lines where line.hasPrefix("data: ") {
+            guard let event = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(6).utf8)) as? [String: Any],
+                  let type = event["type"] as? String else { continue }  // "data: [DONE]" ends the stream
+            switch type {
+            case "response.output_item.added" where (event["item"] as? [String: Any])?["type"] as? String == "message": text = ""
+            case "response.output_text.delta":
+                text += event["delta"] as? String ?? ""
+                progress(thinking, text)
+            case "response.reasoning_summary_part.added" where !thinking.isEmpty: thinking += "\n"
+            case "response.reasoning_summary_text.delta":
+                thinking += event["delta"] as? String ?? ""
+                progress(thinking, text)
+            case "response.completed", "response.failed", "response.incomplete":
+                return try JSONSerialization.data(withJSONObject: event["response"] ?? [:])
+            case "error": throw Failure("Muse returned an error: \(event["message"] as? String ?? "unknown")")
+            default: break
+            }
+        }
+        throw Failure("Muse's stream ended early")
+    }
+
+    private static func failure(_ response: URLResponse, _ data: Data) -> Failure {
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let message = (try? decoder.decode(Response.self, from: data).error?.message) ?? String(decoding: data.prefix(300), as: UTF8.self)
+        return Failure("Muse returned \(status): \(message)")
     }
 
     /// The answer is the `output_text` of the last `message` item. The `reasoning` items hold the model's thinking, and

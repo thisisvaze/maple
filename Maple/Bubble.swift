@@ -2,7 +2,8 @@ import PencilKit
 import UIKit
 
 /// An answer beside its mark: a quiet dot that opens into a glass bubble. While Muse answers, the dot is the thinking
-/// orb; it turns orange if asking failed, and a tap tries again.
+/// orb, and when the answer streams, a tap on it opens what has arrived so far; it turns orange if asking failed, and a
+/// tap tries again.
 /// It lives in the canvas's content, top-left at `anchor`, and grows and shrinks with the page like ink. It reads level in
 /// the frame its mark was written in, the page turned by `turn`.
 final class Bubble: UIView {
@@ -11,6 +12,7 @@ final class Bubble: UIView {
     let zoom: CGFloat  // the page's zoom when its mark was made
     var turn: CGFloat
     var note: Note? { didSet { update() } }  // nil while Muse is reading
+    var preview: String? { didSet { if open { update() } } }  // what Muse has said so far, while it's still reading
     var retry: (() -> Void)? { didSet { update() } }
     var deleted: () -> Void = {}
     var open = false
@@ -85,7 +87,7 @@ final class Bubble: UIView {
     @objc func tapped() { _ = accessibilityActivate() }
 
     override func accessibilityActivate() -> Bool {
-        if let retry { retry() } else if note != nil { toggle(true) }
+        if let retry { retry() } else if note != nil || preview != nil { toggle(true) }
         return true
     }
 
@@ -103,7 +105,7 @@ final class Bubble: UIView {
         isAccessibilityElement = !open
         accessibilityLabel = retry != nil ? "Couldn't answer. Try again" : note == nil ? "Thinking" : "Answer"
         let thinking = note == nil && retry == nil
-        orb.isHidden = !thinking
+        orb.isHidden = !thinking || open
         dot.isHidden = open || thinking || retry != nil
         backgroundColor = retry == nil ? .clear : .paper.withAlphaComponent(0.94)
         layer.cornerRadius = 15
@@ -114,13 +116,13 @@ final class Bubble: UIView {
             retryLabel.frame = CGRect(x: 38, y: 0, width: bounds.width - 48, height: bounds.height)
             return
         }
-        guard open, let note else {
+        guard open, let text = note?.reply ?? preview else {
             bounds = CGRect(x: 0, y: 0, width: thinking ? 34 : 28, height: thinking ? 34 : 28)
             dot.frame = CGRect(x: 8, y: 8, width: 12, height: 12)
             orb.frame = bounds
             return
         }
-        label.text = note.reply
+        label.text = text
         let textWidth = Self.width - 28
         let height = label.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude)).height
         bounds = CGRect(x: 0, y: 0, width: Self.width, height: height + 96)

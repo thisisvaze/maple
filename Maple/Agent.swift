@@ -114,21 +114,41 @@ nonisolated struct Agent: Sendable {
     /// `near` is a close-up with the new mark in red; `around` is the working area. `gesture` is "question",
     /// "double_question", "equals", "dots", "bullet" or "double_dot", or "voice" with a transcript in `speech`. `target` is the
     /// earlier answer the mark sits beside, if any.
-    func ask(near: Data, around: Data, gesture: String, threads: [Thread], target: String?, speech: String? = nil, memory: [Memory.Line] = []) async throws -> Answer {
+    /// With `progress`, the answer streams: Muse's summary of its thinking, and the reply so far, as each piece arrives.
+    func ask(near: Data, around: Data, gesture: String, threads: [Thread], target: String?, speech: String? = nil, memory: [Memory.Line] = [],
+             progress: (@Sendable (_ thinking: String, _ reply: String) -> Void)? = nil) async throws -> Answer {
         struct Context: Encodable { var gesture: String, target: String?, threads: [Thread], speech: String?, memory: [Memory.Line] }
         let context = String(decoding: try JSONEncoder().encode(Context(gesture: gesture, target: target, threads: threads, speech: speech, memory: memory)), as: UTF8.self)
         let asked = Asked(), deep = gesture == "double_question"
         var muse = self.muse
         if deep { muse.model = Self.deep.model }
+        var streaming: (@Sendable (String, String) -> Void)?
+        if let progress { streaming = { thinking, text in progress(thinking, Self.partialReply(text)) } }
         let reply = try await muse.respond([.png(near), .png(around), .text(context)], instructions: Self.instructions, schema: Self.schema,
                                            effort: deep ? Self.deep.effort : .minimal, maxOutputTokens: deep ? 16_000 : 4000,
-                                           search: true, functions: gesture == "voice" ? [Self.calculate, Self.drawBox(asked)] : [Self.calculate])
+                                           search: true, functions: gesture == "voice" ? [Self.calculate, Self.drawBox(asked)] : [Self.calculate],
+                                           progress: streaming)
         var answer = try JSONDecoder().decode(Answer.self, from: Data(reply.text.utf8))
         (answer.searched, answer.calculated) = (reply.searched, reply.called.filter { $0 == "calculate" }.count)
         answer.boxes = asked.boxes.withLock { $0 }
-        // Wonder opens with a list marker ("• " or ". ", 3 Nov) even when told not to; a marker needs a space after it, so −1 and .5 stay.
-        if deep { answer.reply = answer.reply.replacing(/^\s*(?:[•·*.\-]\s+)+/, with: "") }
+        if deep { answer.reply = answer.reply.replacing(Self.marker, with: "") }
         return answer
+    }
+
+    /// Wonder opens with a list marker ("• " or ". ", 3 Nov) even when told not to; a marker needs a space after it, so −1 and .5 stay.
+    static var marker: Regex<Substring> { /^\s*(?:[•·*.\-]\s+)+/ }
+
+    /// The reply in an answer still being written: what's after its "reply" key so far, as text. Empty until the key is in.
+    static func partialReply(_ json: String) -> String {
+        guard let key = json.firstRange(of: /"reply"\s*:\s*"/) else { return "" }
+        var raw = "", escaped = false
+        for c in json[key.upperBound...] {
+            if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == "\"" { break }
+            raw.append(c)
+        }
+        if escaped { raw.removeLast() }  // an escape still coming
+        let text = (try? JSONDecoder().decode(String.self, from: Data("\"\(raw)\"".utf8))) ?? raw
+        return text.replacing(Self.marker, with: "")
     }
 
     /// Fills an empty box of `size` points, with room for long stroke lists. `asked` is the question Maple already wrote

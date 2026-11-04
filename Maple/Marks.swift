@@ -457,7 +457,10 @@ final class Marks {
         defer { asking -= 1 }
         let start = ContinuousClock.now
         do {
-            let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target, memory: memory)
+            // The answer streams: a tap on the thinking dot opens what's arrived, Muse's summary of its thinking first.
+            bubble?.preview = nil
+            let progress: @Sendable (String, String) -> Void = { thinking, reply in Task { @MainActor in bubble?.preview = reply.isEmpty ? thinking : reply } }
+            let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target, memory: memory, progress: progress)
             logger.notice("answered gesture=\(gesture, privacy: .public) passage=\(answer.passage) searched=\(answer.searched) calculated=\(answer.calculated) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             guard active else { return }
             learn(answer, evidence: answer.reading)
