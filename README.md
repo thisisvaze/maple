@@ -130,4 +130,6 @@ MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]   # Jev reads ma
 
 ## Credits
 
+Maple is under the MIT License; see [LICENSE](LICENSE). The fonts below keep their own licenses.
+
 Maple writes its answers and drawing labels in Maple Hand: [Handlee](https://fonts.google.com/specimen/Handlee) by Joe Prince (SIL Open Font License 1.1) traced into pen strokes (`Maple/hand.json`), so they are real ink; answer bubbles use the system font. See `Maple/Hand-LICENSE.txt`. Greek letters and a few signs are written in Hershey Greek (`Maple/greek.jhf`). The Hershey Fonts were originally created by Dr. A. V. Hershey at the U.S. National Bureau of Standards; see `Maple/Hershey-LICENSE.txt`.
