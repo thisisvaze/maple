@@ -159,10 +159,6 @@ import UIKit
 
     private func fail(_ error: any Error) {
         cancel()
-        guard let controller, controller.view.window != nil else { return }
-        let alert = UIAlertController(title: "Couldn't listen", message: error.localizedDescription, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        controller.present(alert, animated: true)
     }
 
     private func update() {
