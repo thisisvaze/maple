@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fdfcf8">
+  <title>Maple — A notebook that thinks with you</title>
+  <meta name="description" content="A notebook for visual thinkers who work ideas out with a pencil. Ask questions, explore diagrams, and refine your ideas right on the page. Made for iPad and Apple Pencil.">
+  <meta property="og:title" content="Maple — A notebook that thinks with you">
+  <meta property="og:description" content="For visual thinkers who work ideas out with a pencil. Made for iPad and Apple Pencil.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://thisisvaze.github.io/maple/">
+  <meta property="og:image" content="https://thisisvaze.github.io/maple/icon.png">
+  <link rel="canonical" href="https://thisisvaze.github.io/maple/">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="stylesheet" href="tokens.css">
+  <style>
+    /* Hallmark · macrostructure: Long Document · theme: Atelier, existing Maple palette · tone: quiet · anchor hue: blue · nav: N9 · footer: Ft2 · enrichment: none */
+    /* Hallmark · pre-emit critique: P4 H4 E4 S5 R5 V4 */
+    * { box-sizing: border-box; }
+    html, body { overflow-x: clip; }
+    html { background: var(--color-paper); color: var(--color-ink); }
+    body { margin: 0; font-family: var(--font-body); -webkit-font-smoothing: antialiased; }
+    .page { max-width: 48rem; margin-inline: auto; padding: var(--space-xl) var(--space-lg); }
+    header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-md); }
+    .brand { display: flex; align-items: center; gap: var(--space-sm); font-size: var(--text-brand); font-weight: 600; letter-spacing: -.04em; }
+    .brand img { border-radius: var(--radius-icon); }
+    a { color: var(--color-blue); text-decoration-thickness: 1px; text-underline-offset: .25em; }
+    header a, .source, footer a { white-space: nowrap; display: inline-flex; align-items: center; min-height: 44px; }
+    header a { font-size: var(--text-small); }
+    a:hover { text-decoration-thickness: 2px; }
+    a:active { opacity: .7; }
+    a:focus-visible { outline: 2px solid var(--color-blue); outline-offset: 5px; border-radius: 2px; }
+    main { padding-block: var(--space-hero) var(--space-xl); }
+    h1 { margin: 0; max-width: 14ch; font-family: var(--font-display); font-size: var(--text-display); font-weight: 400; line-height: 1.07; letter-spacing: -.045em; overflow-wrap: anywhere; min-width: 0; }
+    p { margin: 0; }
+    .intro { margin-top: var(--space-lg); max-width: 36rem; font-size: var(--text-lead); line-height: 1.6; }
+    .intro strong { font-weight: 600; }
+    .examples { margin-block: var(--space-xl); }
+    .examples > div { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: var(--space-md); align-items: baseline; margin-top: var(--space-lg); }
+    dt { color: var(--color-blue); font-family: var(--font-display); font-size: var(--text-mark); line-height: 1; }
+    dd { margin: 0; font-size: var(--text-body); line-height: 1.65; }
+    dd strong { font-weight: 600; }
+    .closing { max-width: 34rem; color: var(--color-muted); font-size: var(--text-body); line-height: 1.65; }
+    .source { margin-top: var(--space-lg); gap: var(--space-sm); font-size: var(--text-body); }
+    footer { border-top: 1px solid var(--color-rule); padding-block: var(--space-md); display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm) var(--space-lg); color: var(--color-muted); font-size: var(--text-small); line-height: 1.6; align-items: center; }
+    footer a { color: inherit; }
+    @media (min-width: 40rem) {
+      .page { padding-block: var(--space-xl); }
+      .examples > div { grid-template-columns: 3rem minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <span class="brand"><img src="icon.png" alt="" width="44" height="44">Maple</span>
+      <a href="https://github.com/thisisvaze/maple">GitHub <span aria-hidden="true">&nbsp;↗</span></a>
+    </header>
+    <main>
+      <h1>A notebook that thinks with you.</h1>
+      <p class="intro">For <strong>visual thinkers</strong> who work ideas out with a pencil. Sketch a product, work through a problem, or plan what comes next. Maple thinks along, right on the page.</p>
+      <dl class="examples" aria-label="Ways to think with Maple">
+        <div>
+          <dt><span aria-hidden="true">?</span><span class="sr-only">Question mark</span></dt>
+          <dd><strong>Write a question.</strong> Lift the pencil, and Maple writes an answer beside it.</dd>
+        </div>
+        <div>
+          <dt><span aria-hidden="true">□</span><span class="sr-only">Empty box</span></dt>
+          <dd><strong>Draw an empty box.</strong> Maple fills it with a diagram, a graph, or a picture, from the words around it.</dd>
+        </div>
+        <div>
+          <dt><span aria-hidden="true">↗</span><span class="sr-only">Edit mark</span></dt>
+          <dd><strong>Mark what you want to change.</strong> Circle part of Maple’s work with the edit brush and write what you have in mind.</dd>
+        </div>
+      </dl>
+      <p class="closing">Keep your pencil on the page. Your sketches, questions, and ideas stay together as the thought takes shape.</p>
+      <a class="source" href="https://github.com/thisisvaze/maple">Explore Maple on GitHub <span aria-hidden="true">↗</span></a>
+    </main>
+    <footer>
+      <p>Made for iPad and Apple Pencil.</p>
+      <a href="https://github.com/thisisvaze">Made by Vaze <span aria-hidden="true">&nbsp;↗</span></a>
+    </footer>
+  </div>
+</body>
+</html>

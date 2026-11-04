@@ -95,6 +95,14 @@ Eraser and edit have distinct materials in that same engine: a warm rubber rub a
 
 Muse is called through the Responses API with text and PNG, at minimal reasoning effort unless a `??` asks for more. Answers to marks stream over server-sent events, with a reasoning summary; box fills and edits don't, since nothing shows until they're whole.
 
+## Website
+
+[Visit Maple](https://thisisvaze.github.io/maple/).
+
+The landing page is plain HTML and CSS in `docs/`, with no build step. Preview it with `python3 -m http.server --directory docs`, then open `http://localhost:8000`.
+
+For GitHub Pages, publish from the `main` branch and `/docs` folder. Only the files in `docs/` belong to the website.
+
 ## Run it
 
 Needs Xcode 27 and [XcodeGen](https://github.com/yonaskolb/XcodeGen).

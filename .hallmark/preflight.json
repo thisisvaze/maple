@@ -1,0 +1,10 @@
+{
+  "date": "2026-11-04",
+  "framework": "static HTML and CSS",
+  "existingReference": "design/index.html",
+  "preserve": ["Maple warm paper, graphite and blue ink", "native system body type", "VOICE.md"],
+  "audience": "visual thinkers who work ideas out with a pencil",
+  "useCase": "introduce Maple and link to its GitHub source",
+  "tone": "quiet",
+  "motion": "none"
+}
