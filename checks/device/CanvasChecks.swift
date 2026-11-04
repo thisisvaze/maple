@@ -40,7 +40,8 @@ extension DeviceChecks {
         #expect(opened.isHidden && !(c.turner is UIWindow) && c.canvas.isDescendant(of: c.view), "Ink must return to the paper before its closing animation.")
         #expect(c.turner.transform == transform && c.center == center && c.canvas.zoomScale == 1.6)
         #expect(c.canvas.drawing.dataRepresentation() == ink && gestures.allSatisfy { $0.view === c.turner })
-        #expect(c.canvas.panGestureRecognizer.minimumNumberOfTouches == 2 && c.canvas.panGestureRecognizer.maximumNumberOfTouches == 2)
+        #expect(c.navigation.view === c.turner && c.navigation.isEnabled)
+        #expect(!c.canvas.panGestureRecognizer.isEnabled && c.canvas.pinchGestureRecognizer?.isEnabled == false)
     }
 
     @Test func queuedFrameReleasesOwner() throws {
@@ -158,10 +159,15 @@ extension DeviceChecks {
             UserDefaults.standard.removeObject(forKey: page.viewportKey)
             try? FileManager.default.removeItem(at: folder)
         }
-        let pinch = PinchProbe(), rotation = RotationProbe()
-        c.turner.addGestureRecognizer(rotation)
-        pinch.phase = .began
-        c.navigationChanged(pinch)
+        let navigation = c.navigation!, event = UIEvent()
+        let fingers = [FingerProbe(CGPoint(x: 300, y: 500)), FingerProbe(CGPoint(x: 500, y: 500))]
+        let touches = Set<UITouch>(fingers)
+        navigation.touchesBegan([fingers[0]], with: event)
+        fingers[0].point.x += 20
+        navigation.touchesMoved([fingers[0]], with: event)
+        #expect(c.canvas.zoomScale == 1 && c.rotation == 0 && !c.marks.navigating, "One finger never moves the page.")
+        fingers[0].point.x -= 20
+        navigation.touchesBegan([fingers[1]], with: event)
         let line = [CGPoint(x: 65500, y: 65500), CGPoint(x: 65600, y: 65500)]
         let stroke = AgentPen.stroke(line, width: 3, step: 2)
         let note = Note(mark: "question", trigger: [], anchor: line[0], zoom: 1, reading: "test", reply: "Answer",
@@ -169,45 +175,48 @@ extension DeviceChecks {
         c.marks.enqueue { .init(add: [stroke], notes: [note]) }
         c.marks.flush()
         #expect(c.canvas.drawing.strokes.isEmpty && c.marks.pending.count == 1, "AI cannot replace a drawing during a pinch.")
-        c.canvas.zoomScale = 1.7
-        c.rotation = 0.4
-        c.turn()
+        for (i, finger) in fingers.enumerated() {
+            let side: CGFloat = i == 0 ? -1 : 1
+            finger.point = CGPoint(x: 400 + side * 170 * cos(0.4), y: 500 + side * 170 * sin(0.4))
+        }
+        navigation.touchesMoved(touches, with: event)
         c.viewDidLayoutSubviews()
-        #expect(c.canvas.zoomScale == 1.7 && c.rotation == 0.4)
-        #expect(c.canvas.panGestureRecognizer.isEnabled && c.canvas.pinchGestureRecognizer?.isEnabled == true)
-        rotation.phase = .changed
-        c.navigationChanged(rotation)
-        pinch.phase = .ended
-        c.navigationChanged(pinch)
-        #expect(c.marks.navigating, "Ending a pinch does not release an ongoing rotation.")
+        #expect(abs(c.canvas.zoomScale - 1.7) < 0.001 && c.rotation == 0, "The page turns only once the fingers pass twistStart.")
+        #expect(navigation.isEnabled && c.marks.navigating && c.canvas.isZooming, "PencilKit must use live zoom rendering during the gesture.")
         c.marks.flush()
         #expect(c.canvas.drawing.strokes.isEmpty)
-        rotation.phase = .cancelled
-        c.navigationChanged(rotation)
-        #expect(!c.marks.navigating)
+        navigation.touchesBegan([FingerProbe(CGPoint(x: 600, y: 500))], with: event)
+        #expect(!c.marks.navigating && !c.canvas.isZooming, "A third finger cancels navigation and live zoom rendering for the quick menu.")
         c.marks.flush()
         #expect(c.canvas.drawing.strokes.count == 1 && c.marks.pending.isEmpty)
         let written = try #require(c.marks.written.first)
         written.reveal([stroke], along: [line], letters: 80)
         #expect(!written.isUserInteractionEnabled)
-        pinch.phase = .began
-        c.navigationChanged(pinch)
-        #expect(c.marks.navigating && c.canvas.pinchGestureRecognizer?.isEnabled == true,
+        navigation.isEnabled = false
+        navigation.isEnabled = true
+        navigation.reset()  // direct touch probes don't drive UIKit's reset between gestures
+        navigation.touchesBegan(touches, with: event)
+        #expect(c.marks.navigating && navigation.isEnabled,
                 "AI's writing reveal leaves pinch input enabled.")
         c.canvas.zoomScale = 2.1
         c.marks.layout()
         #expect(c.canvas.zoomScale == 2.1 && !written.isUserInteractionEnabled)
-        pinch.phase = .ended
-        c.navigationChanged(pinch)
+        navigation.touchesEnded([fingers[0]], with: event)
+        #expect(!c.marks.navigating && !c.canvas.isZooming)
+        let replacement = FingerProbe(CGPoint(x: 300, y: 500)), zoom = c.canvas.zoomScale
+        navigation.touchesBegan([replacement], with: event)
+        replacement.point.x -= 50
+        navigation.touchesMoved([replacement], with: event)
+        #expect(c.marks.navigating && abs(c.canvas.zoomScale - zoom) > 0.01, "Replacing a finger starts moving again without lifting both.")
+        navigation.touchesCancelled([fingers[1], replacement], with: event)
+        #expect(!c.marks.navigating && !c.canvas.isZooming, "An interruption releases queued AI ink and ends live zoom rendering.")
     }
 }
 
-private final class PinchProbe: UIPinchGestureRecognizer {
-    var phase = UIGestureRecognizer.State.possible
-    override var state: UIGestureRecognizer.State { get { phase } set { phase = newValue } }
-}
-
-private final class RotationProbe: UIRotationGestureRecognizer {
-    var phase = UIGestureRecognizer.State.possible
-    override var state: UIGestureRecognizer.State { get { phase } set { phase = newValue } }
+private final class FingerProbe: UITouch {
+    var point: CGPoint
+    init(_ point: CGPoint) { self.point = point; super.init() }
+    override func location(in view: UIView?) -> CGPoint { point }
+    override var type: UITouch.TouchType { .direct }
+    override var majorRadius: CGFloat { 12 }
 }

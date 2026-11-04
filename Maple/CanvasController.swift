@@ -1,5 +1,114 @@
 import PencilKit
 import SwiftUI
+import UIKit.UIGestureRecognizerSubclass
+
+/// Keep PencilKit's sharp live tiles when Navigation drives zoomScale itself.
+final class InkCanvas: PKCanvasView {
+    weak var navigation: Navigation?
+    override var isZooming: Bool { super.isZooming || navigation?.moving == true }
+}
+
+/// One pair of fingers moves, scales and turns the page together, measured on the still screen. UIKit's separate
+/// pinch and rotation recognizers can stop recognizing after their window turns (3 Nov, physical iPad).
+final class Navigation: UIGestureRecognizer {
+    // Calibration knobs, from v1's device log, where pinches wobbled up to about 12°.
+    static let twistStart: CGFloat = .pi / 12  // 15°: the fingers turn this far before the page turns with them
+    static let snap: CGFloat = .pi / 18  // 10°: a turn let go this close to a right angle squares the page
+    weak var controller: CanvasController?
+    /// Each finger, where it was last seen moving on the still screen. The page's window turns under the fingers, so a
+    /// finger held still keeps that spot rather than being read again through a turn it didn't make.
+    private var fingers: [(touch: UITouch, at: CGPoint)] = []
+    private var start: (a: CGPoint, b: CGPoint, zoom: CGFloat, anchor: CGPoint)?
+    private var angle: CGFloat = 0
+    private var turned: CGFloat = 0  // how far this pair has turned, until the page turns with it
+    private var twisting = false
+    var moving: Bool { start != nil && (state == .began || state == .changed) }
+
+    init(controller: CanvasController) {
+        self.controller = controller
+        super.init(target: nil, action: nil)
+        allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
+        cancelsTouchesInView = false
+        delaysTouchesEnded = false
+    }
+
+    override func canPrevent(_ other: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by other: UIGestureRecognizer) -> Bool { false }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let c = controller, c.loadError == nil else { state = .failed; return }
+        fingers += touches.map { ($0, $0.location(in: c.view)) }
+        guard fingers.count == 2 else {
+            if fingers.count > 2 { end(cancelled: true) }
+            return
+        }
+        let a = fingers[0].at, b = fingers[1].at
+        guard hypot(b.x - a.x, b.y - a.y) > 0 else { return }
+        let p = c.canvas.convert(CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2), from: c.view)
+        start = (a, b, c.canvas.zoomScale, CGPoint(x: p.x / c.canvas.zoomScale, y: p.y / c.canvas.zoomScale))
+        angle = atan2(b.y - a.y, b.x - a.x)
+        (turned, twisting) = (0, false)
+        c.marks.navigating = true
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let c = controller else { return }
+        for i in fingers.indices where touches.contains(fingers[i].touch) { fingers[i].at = fingers[i].touch.location(in: c.view) }
+        guard let start, fingers.count == 2 else { return }
+        let a = fingers[0].at, b = fingers[1].at
+        // Leave a tap's small tremor alone; the first movement carries its whole distance, with no jump at the threshold.
+        guard state != .possible || max(hypot(a.x - start.a.x, a.y - start.a.y), hypot(b.x - start.b.x, b.y - start.b.y)) > 4 else { return }
+        if state == .possible { state = .began; c.instantTiles(true) } else { state = .changed }
+        let next = atan2(b.y - a.y, b.x - a.x), delta = (next - angle).remainder(dividingBy: 2 * .pi)
+        angle = next
+        // A pinch's wobble leaves the page straight; past twistStart the page turns with the fingers from where they are.
+        if twisting { c.rotation = (c.rotation + delta).remainder(dividingBy: 2 * .pi) } else {
+            turned += delta
+            twisting = abs(turned) > Self.twistStart
+        }
+        c.turn()
+        let zoom = start.zoom * hypot(b.x - a.x, b.y - a.y) / hypot(start.b.x - start.a.x, start.b.y - start.a.y)
+        c.canvas.zoomScale = min(c.canvas.maximumZoomScale, max(c.canvas.minimumZoomScale, zoom))
+        let p = c.canvas.convert(CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2), from: c.view)
+        c.canvas.contentOffset.x += start.anchor.x * c.canvas.zoomScale - p.x
+        c.canvas.contentOffset.y += start.anchor.y * c.canvas.zoomScale - p.y
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        fingers.removeAll { touches.contains($0.touch) }
+        start = nil
+        stopped()
+        if fingers.isEmpty { end(cancelled: false) }
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { end(cancelled: true) }
+
+    private func end(cancelled: Bool) {
+        stopped()
+        guard state == .began || state == .changed, let c = controller else { state = .failed; return }
+        state = cancelled ? .cancelled : .ended
+        let square = (c.rotation / (.pi / 2)).rounded() * .pi / 2
+        if twisting, abs(c.rotation - square) < Self.snap {
+            c.rotation = square
+            UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.25) { c.turn() }
+        }
+        c.save()
+    }
+
+    override func reset() {
+        super.reset()
+        stopped()
+        fingers = []
+        start = nil
+    }
+
+    /// The fingers stopped moving the page: Maple may write again, and PencilKit draws the zoom the page settled on. It
+    /// does that only in a layout pass, which setting zoomScale never brings, so it dropped its live tiles a moment later
+    /// and the ink stayed blank until the drawing next changed (3 Nov, simulator film).
+    private func stopped() {
+        controller?.marks.navigating = false
+        controller?.canvas.setNeedsLayout()
+    }
+}
 
 /// The page's own window, over the app's, which turns it and keeps the paper, the buttons and the alerts level. Only a whole
 /// window hides a turn from PencilKit: a canvas turned on screen any other way, by around 45°, keeps only samples 10 screen
@@ -44,7 +153,7 @@ struct Paper: UIViewControllerRepresentable {
 
 /// One page of paper: Apple Pencil writes, two fingers pan, pinch and rotate, two-finger tap undoes, three-finger tap redoes,
 /// and double-tapping the Pencil goes from pen to eraser to the edit brush and back to the pen.
-final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilInteractionDelegate, UIGestureRecognizerDelegate {
+final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilInteractionDelegate {
     // Calibration knobs: tune by feel with a real Pencil.
     static let penWidth: CGFloat = 1.8  // fine handwriting
     static let eraserWidth: CGFloat = 41  // on screen; PencilKit clamps to 16.4–80.4 page points
@@ -57,7 +166,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     static let sheet = Page.sheet
 
     let page: Page
-    let canvas = PKCanvasView()
+    let canvas = InkCanvas()
     /// Turns the page; the canvas inside it stays upright. A PKCanvasView carrying a rotation itself drops ink tiles it
     /// still needs while zooming, so a turned page blinked blank mid-pinch (v1, 27 Oct sim film at 76°: 58 frames lost
     /// the ink with the canvas turned, 5 with a turner, 10 with the page straight).
@@ -68,7 +177,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var dirty = false
     var laidOutSize = CGSize.zero  // the screen the page was last laid out for
     var rotation: CGFloat = 0
-    var twist: CGFloat?  // the fingers' last angle on screen, while they turn the page
+    var navigation: Navigation!
     var saveTask: Task<Void, Never>?
     var saveErrorShown = false
     let history = History()
@@ -175,13 +284,13 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         undoTap.require(toFail: redoTap)
         canvas.addGestureRecognizer(undoTap)
         canvas.addGestureRecognizer(redoTap)
-        let twist = UIRotationGestureRecognizer(target: self, action: #selector(rotate))
-        twist.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
-        twist.delegate = self
-        turner.addGestureRecognizer(twist)
-        for gesture in [canvas.panGestureRecognizer, canvas.pinchGestureRecognizer, twist].compactMap({ $0 }) {
-            gesture.addTarget(self, action: #selector(navigationChanged))
-        }
+        canvas.panGestureRecognizer.isEnabled = false
+        canvas.pinchGestureRecognizer?.isEnabled = false
+        navigation = Navigation(controller: self)
+        canvas.navigation = navigation
+        turner.addGestureRecognizer(navigation)
+        undoTap.require(toFail: navigation)
+        redoTap.require(toFail: navigation)
         quickShape = QuickShape(controller: self)
         canvas.addGestureRecognizer(quickShape)
         quickMenu = QuickMenu(controller: self)
@@ -238,9 +347,9 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // One finger or a palm never moves the paper. Set here: PencilKit resets it to 1 on joining a window.
-        if canvas.panGestureRecognizer.minimumNumberOfTouches != 2 { canvas.panGestureRecognizer.minimumNumberOfTouches = 2 }
-        if canvas.panGestureRecognizer.maximumNumberOfTouches != 2 { canvas.panGestureRecognizer.maximumNumberOfTouches = 2 }  // three fingers call the quick menu
+        // PencilKit can reenable these on joining a window; only Navigation moves the paper.
+        if canvas.panGestureRecognizer.isEnabled { canvas.panGestureRecognizer.isEnabled = false }
+        if canvas.pinchGestureRecognizer?.isEnabled == true { canvas.pinchGestureRecognizer?.isEnabled = false }
         // Only a new screen size moves the page: a label or button laid out mid-pinch, like Jev's tag, must not reset the zoom.
         guard view.bounds.width > 0, view.bounds.height > 0, view.bounds.size != laidOutSize else { return }
         if laidOutSize != .zero {
@@ -303,14 +412,14 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         surface.backgroundColor = .clear
         surface.isOpaque = false
         surface.addSubview(canvas)
-        for gesture in previous.gestureRecognizers ?? [] where gesture is UIRotationGestureRecognizer || gesture === quickMenu.swipe {
+        for gesture in previous.gestureRecognizers ?? [] where gesture === navigation || gesture === quickMenu.swipe {
             surface.addGestureRecognizer(gesture)
         }
         turner = surface
         previous.isHidden = true
         previous.removeFromSuperview()
-        canvas.panGestureRecognizer.minimumNumberOfTouches = 2
-        canvas.panGestureRecognizer.maximumNumberOfTouches = 2
+        canvas.panGestureRecognizer.isEnabled = false
+        canvas.pinchGestureRecognizer?.isEnabled = false
     }
 
     func setVoiceEnabled(_ enabled: Bool) {
@@ -380,41 +489,6 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         settings.setValue(on, forKey: "toolShadowActive")
     }
 
-    @objc func rotate(_ gesture: UIRotationGestureRecognizer) {
-        guard loadError == nil else { return }
-        switch gesture.state {
-        case .began, .changed:
-            // Measured on the still screen: gesture.rotation is taken in the window it turns, so it would chase its own turn.
-            guard gesture.numberOfTouches == 2 else { twist = nil; return }
-            let a = gesture.location(ofTouch: 0, in: view), b = gesture.location(ofTouch: 1, in: view), angle = atan2(b.y - a.y, b.x - a.x)
-            defer { twist = angle }
-            guard let twist else { return }
-            let pivot = gesture.location(in: view), before = canvas.convert(pivot, from: view)
-            rotation = (rotation + (angle - twist).remainder(dividingBy: 2 * .pi)).remainder(dividingBy: 2 * .pi)
-            // Only the turn and the offset change, never the zoom or the canvas's size: either, set mid-gesture, cuts short the
-            // pinch the fingers are also making, as every twist event did from 27 Oct.
-            turn()
-            let after = canvas.convert(pivot, from: view)
-            canvas.contentOffset.x += before.x - after.x
-            canvas.contentOffset.y += before.y - after.y
-        case .ended, .cancelled:
-            twist = nil
-            save()
-        default: break
-        }
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        other === canvas.panGestureRecognizer || other === canvas.pinchGestureRecognizer
-    }
-
-    @objc func navigationChanged(_ gesture: UIGestureRecognizer) {
-        let navigation = [canvas.panGestureRecognizer, canvas.pinchGestureRecognizer, gesture].compactMap { $0 }
-            + (turner.gestureRecognizers ?? []).filter { $0 is UIRotationGestureRecognizer }
-        // Replacing PencilKit's drawing during a gesture can cancel the fingers' pan, pinch or rotation.
-        marks.navigating = navigation.contains { $0.state == .began || $0.state == .changed }
-    }
-
     @objc func undo() { history.undo(); updateTools() }
     @objc func redo() { history.redo(); updateTools() }
 
@@ -468,19 +542,16 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     /// Keeps the eraser and the edit brush their width on screen at every zoom. Their widths are in page points, so one
-    /// made zoomed out grows with the page zoomed in: an eraser could fill the screen. Fitted on every zoom change, not
-    /// just when a pinch ends, since a twist sets the zoom mid-pinch and that end can be skipped.
+    /// made zoomed out grows with the page zoomed in: an eraser could fill the screen. Fitted on every zoom change.
     func fitTool() {
         if let tool = canvas.tool as? PKEraserTool, abs(tool.width - eraser.width) > 0.25 { canvas.tool = eraser }
         else if brushing, let tool = canvas.tool as? PKInkingTool, abs(tool.width - brush.width) > 0.05 { canvas.tool = brush }
     }
 
-    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { instantTiles(true) }  // PencilKit may have made a new one
-
     /// PencilKit drops old ink tiles when a pinch changes the zoom, then fades the re-rendered ones in from nothing over
     /// 0.25 s, so every pinch dimmed patches of ink and brought them back (v1, 27 Oct device probe). Its tiles live in a
     /// plain view inside its private attachment view: run that view's clock 1000× fast and the fade lands within a frame.
-    /// Only from a pinch until the pen comes down: at that speed the ink being written drew as dots joined by curves
+    /// Only from navigation until the pen comes down: at that speed the ink being written drew as dots joined by curves
     /// (29 Oct, on the iPad). Not the attachment view itself: a zoom bounce animates its bounds, which must keep pace with
     /// the page. Found by class name; if it's ever missing, nothing changes.
     func instantTiles(_ on: Bool) {

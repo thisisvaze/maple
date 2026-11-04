@@ -85,10 +85,8 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
     /// them may have panned, pinched or turned it a little first.
     func open() {
         guard let c = controller, panel.superview == nil else { return }
-        for recognizer in [c.canvas.panGestureRecognizer, c.canvas.pinchGestureRecognizer].compactMap({ $0 }) + (c.turner.gestureRecognizers ?? []).filter({ $0 is UIRotationGestureRecognizer }) {
-            recognizer.isEnabled = false  // cancels it
-            recognizer.isEnabled = true
-        }
+        c.navigation.isEnabled = false  // cancels it
+        c.navigation.isEnabled = true
         if let held {
             c.rotation = held.turn
             c.show(held.center, zoom: held.zoom)

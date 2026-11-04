@@ -38,16 +38,31 @@ struct Check {
         controller.marks.apply(.init(add: [drawn], notes: [note]))
         let bubble = controller.marks.add(Bubble(anchor: anchor, zoom: 1.5, turn: 0, note: note))
         let ink = canvas.drawing.dataRepresentation()
-        let twist = Rotation()
-        twist.pivot = pivot
-        controller.rotate(twist)  // the first sight of the fingers turns nothing
+        let navigation = controller.navigation!, touchEvent = UIEvent()
+        let fingers = [Finger(CGPoint(x: pivot.x - 60, y: pivot.y)), Finger(CGPoint(x: pivot.x + 60, y: pivot.y))]
+        let touches = Set<UITouch>(fingers)
+        navigation.touchesBegan(touches, with: touchEvent)
         precondition(controller.rotation == 0)
+        var angle: CGFloat = 0
+        func move(_ pivot: CGPoint, radius: CGFloat = 60) {
+            for (i, finger) in fingers.enumerated() {
+                let side: CGFloat = i == 0 ? -1 : 1
+                finger.point = CGPoint(x: pivot.x + side * radius * cos(angle), y: pivot.y + side * radius * sin(angle))
+            }
+            navigation.touchesMoved(touches, with: touchEvent)
+        }
+        angle = Navigation.twistStart * 0.8
+        move(pivot)
+        precondition(controller.rotation == 0, "a pinch's wobble leaves the page straight")
+        angle = Navigation.twistStart * 1.2
+        move(pivot)
+        precondition(controller.rotation == 0, "past twistStart the page turns from where the fingers are, without a jump")
 
         for delta: CGFloat in [.pi / 4, .pi / 2, -.pi * 7 / 6, .pi * 6] {
             let before = canvas.convert(pivot, from: controller.view)
             let turned = controller.rotation
-            twist.angle += delta
-            controller.rotate(twist)
+            angle += delta
+            move(pivot)
             near(canvas.convert(pivot, from: controller.view), before)
             precondition(abs((controller.rotation - turned - delta).remainder(dividingBy: 2 * .pi)) < 0.001, "the page turns as the fingers do")
             coversScreen(controller)
@@ -55,9 +70,20 @@ struct Check {
         }
         precondition(canvas.drawing.dataRepresentation() == ink, "turning the view never rewrites ink")
         let held = (zoom: canvas.zoomScale, size: canvas.bounds.size)
-        twist.angle += 0.2
-        controller.rotate(twist)
-        precondition(canvas.zoomScale == held.zoom && canvas.bounds.size == held.size, "a twist never sets the zoom or resizes the page, which cut short a pinch made with it")
+        angle += 0.2
+        move(pivot)
+        precondition(abs(canvas.zoomScale - held.zoom) < 0.001 && canvas.bounds.size == held.size, "turning leaves the scale and canvas size alone")
+        let pagePoint = canvas.convert(pivot, from: controller.view).applying(CGAffineTransform(scaleX: 1 / canvas.zoomScale, y: 1 / canvas.zoomScale))
+        let moved = CGPoint(x: pivot.x + 30, y: pivot.y - 20)
+        angle += 0.1
+        move(moved, radius: 75)
+        precondition(abs(canvas.zoomScale - held.zoom * 1.25) < 0.001, "the same fingers zoom and turn together")
+        near(canvas.convert(moved, from: controller.view), CGPoint(x: pagePoint.x * canvas.zoomScale, y: pagePoint.y * canvas.zoomScale))
+        for (radius, limit): (CGFloat, CGFloat) in [(6000, canvas.maximumZoomScale), (0.01, canvas.minimumZoomScale)] {
+            move(moved, radius: radius)
+            precondition(canvas.zoomScale == limit, "zoom stays within the canvas limits")
+            near(canvas.convert(moved, from: controller.view), CGPoint(x: pagePoint.x * limit, y: pagePoint.y * limit))
+        }
         canvas.zoomScale = 1.7  // a pinch under way
         controller.viewDidLayoutSubviews()  // a label appearing lays the page out
         precondition(canvas.zoomScale == 1.7, "laying out on the same screen leaves the zoom alone")
@@ -73,18 +99,16 @@ struct Check {
         controller.rotation = lying
         controller.show(controller.center, zoom: canvas.zoomScale)
         precondition(canvas.transform == .identity && controller.turner.transform != .identity, "the canvas stays upright; its turner turns")
-        controller.scrollViewWillBeginZooming(canvas, with: nil)
+        controller.instantTiles(true)
         func attachment(_ v: UIView) -> UIView? { "\(type(of: v))" == "PKCanvasAttachmentView" ? v : v.subviews.lazy.compactMap(attachment).first }
         let tiles = attachment(canvas)?.subviews.filter { type(of: $0) == UIView.self } ?? []
         precondition(!tiles.isEmpty && tiles.allSatisfy { $0.layer.speed == 1000 }, "PencilKit's tiles are where instantTiles looks, and fade in at once")
         controller.canvasViewDidBeginUsingTool(canvas)
         precondition(tiles.allSatisfy { $0.layer.speed == 1 }, "the pen coming down puts PencilKit back at its own pace")
         controller.canvasViewDidEndUsingTool(canvas)
-        let installed = controller.turner.gestureRecognizers!.first { $0 is UIRotationGestureRecognizer }!
-        precondition(installed.delegate === controller)
-        precondition(controller.gestureRecognizer(installed, shouldRecognizeSimultaneouslyWith: canvas.panGestureRecognizer))
-        precondition(controller.gestureRecognizer(installed, shouldRecognizeSimultaneouslyWith: canvas.pinchGestureRecognizer!))
-        precondition(!controller.gestureRecognizer(installed, shouldRecognizeSimultaneouslyWith: UITapGestureRecognizer()))
+        precondition(navigation.view === controller.turner && navigation.isEnabled)
+        precondition(!canvas.panGestureRecognizer.isEnabled && canvas.pinchGestureRecognizer?.isEnabled == false, "only one recognizer moves the page")
+        precondition(!navigation.canPrevent(UITapGestureRecognizer()) && !navigation.canBePrevented(by: UITapGestureRecognizer()))
 
         // Zooming, panning and a window resize keep the rotated page and its overlays aligned.
         controller.show(CGPoint(x: 2300, y: 3200), zoom: 2)
@@ -96,8 +120,7 @@ struct Check {
         coversScreen(controller)
         near(bubble.convert(.zero, to: controller.view), canvas.convert(CGPoint(x: anchor.x * 2, y: anchor.y * 2), to: controller.view))
 
-        twist.phase = .ended
-        controller.rotate(twist)
+        navigation.touchesEnded(touches, with: touchEvent)
         controller.saveNow()
         let reopened = open(page)
         near(reopened.center, middle)
@@ -223,7 +246,7 @@ struct Check {
         try savedHistory()
         try voicePlacement()
         try interface()
-        print("canvas ok: rotation pivot, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame, edit brush")
+        print("canvas ok: two-finger pan/zoom/rotation, fixed pivot, zoom limits, coverage, overlays, old/new viewport, resize, undo/redo, agent ink after reload, undo by id, writing while the pen rests, fading and scratching out answers, reading frame, edit brush")
     }
 
     static func savedHistory() throws {
@@ -925,7 +948,7 @@ struct Check {
         }
         UserDefaults.standard.set([2150.0, 3100.0, 1.0], forKey: page.viewportKey)
         let controller = open(page), canvas = controller.canvas, marks = controller.marks!, menu = controller.quickMenu!
-        precondition(canvas.panGestureRecognizer.maximumNumberOfTouches == 2, "three fingers don't pan the page")
+        precondition(!canvas.panGestureRecognizer.isEnabled && controller.navigation.isEnabled, "the page has one two-finger handler")
         precondition(controller.turner.gestureRecognizers?.contains { $0 === menu.swipe } == true && menu.swipe.minimumNumberOfTouches == 3)
         precondition(canvas.accessibilityCustomActions?.map(\.name) == ["Copy for AI", "Copy SVG"], "and VoiceOver can reach the same")
 
@@ -1031,9 +1054,9 @@ struct Check {
         draw(box)
         quick.rested()
         guard case let .polygon(corners, true)? = quick.shape, corners.count == 4 else { preconditionFailure("a box: \(String(describing: quick.shape))") }
-        precondition(quick.preview.superlayer === canvas.layer && !canvas.panGestureRecognizer.isEnabled, "shown, and fingers don't pan while it's held")
+        precondition(quick.preview.superlayer === canvas.layer && !controller.navigation.isEnabled, "shown, and fingers don't pan while it's held")
         quick.lift()
-        precondition(canvas.drawing.strokes.count == 1 && AgentPen.person(canvas.drawing.strokes[0]) && canvas.panGestureRecognizer.isEnabled && quick.preview.superlayer == nil, "it lands as the person's ink")
+        precondition(canvas.drawing.strokes.count == 1 && AgentPen.person(canvas.drawing.strokes[0]) && controller.navigation.isEnabled && quick.preview.superlayer == nil, "it lands as the person's ink")
         let drawn = canvas.drawing.strokes[0].path, xs = (0..<drawn.count).map { drawn[$0].location.x }, ys = (0..<drawn.count).map { drawn[$0].location.y }
         let left = xs.min()!, right = xs.max()!, top = ys.min()!, bottom = ys.max()!
         for i in 0..<drawn.count {
@@ -1061,7 +1084,7 @@ struct Check {
         }
         draw(writing)
         quick.rested()
-        precondition(quick.shape == nil && quick.snapped == nil && canvas.panGestureRecognizer.isEnabled, "a pause in writing does nothing")
+        precondition(quick.shape == nil && quick.snapped == nil && controller.navigation.isEnabled, "a pause in writing does nothing")
         quick.lift()
         precondition(canvas.drawing.strokes.isEmpty, "and nothing lands")
         draw(wobbly([CGPoint(x: 2000, y: 3000), CGPoint(x: 2010, y: 3002)]))
@@ -1432,18 +1455,10 @@ nonisolated final class Offline: URLProtocol, @unchecked Sendable {
     }
 }
 
-final class Rotation: UIRotationGestureRecognizer {
-    var phase: UIGestureRecognizer.State = .changed
-    var pivot = CGPoint.zero
-    var angle: CGFloat = 0
-    override var numberOfTouches: Int { 2 }
-    override func location(ofTouch touchIndex: Int, in view: UIView?) -> CGPoint {
-        let side: CGFloat = touchIndex == 0 ? 1 : -1
-        return CGPoint(x: pivot.x + side * 60 * cos(angle), y: pivot.y + side * 60 * sin(angle))
-    }
-    override var state: UIGestureRecognizer.State {
-        get { phase }
-        set { phase = newValue }
-    }
-    override func location(in view: UIView?) -> CGPoint { pivot }
+final class Finger: UITouch {
+    var point: CGPoint
+    init(_ point: CGPoint) { self.point = point; super.init() }
+    override func location(in view: UIView?) -> CGPoint { point }
+    override var type: UITouch.TouchType { .direct }
+    override var majorRadius: CGFloat { 12 }
 }

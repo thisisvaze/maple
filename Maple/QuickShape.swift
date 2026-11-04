@@ -123,8 +123,7 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
         // A disabled recognizer cancels the stroke under way, and the pen's touch stays with this one.
         canvas.drawingGestureRecognizer.isEnabled = false
         canvas.drawingGestureRecognizer.isEnabled = true
-        canvas.panGestureRecognizer.isEnabled = false  // a second finger constrains the shape, it doesn't pan the page
-        canvas.pinchGestureRecognizer?.isEnabled = false
+        controller.navigation.isEnabled = false  // a second finger constrains the shape, it doesn't move the page
         snapped = (found, rest)
         shape = found
         dragging = false
@@ -180,7 +179,6 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
         penAt = nil
         points = []
         preview.removeFromSuperlayer()
-        controller?.canvas.panGestureRecognizer.isEnabled = true
-        controller?.canvas.pinchGestureRecognizer?.isEnabled = true
+        controller?.navigation.isEnabled = true
     }
 }
