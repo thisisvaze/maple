@@ -1,60 +1,102 @@
+import Metal
 import UIKit
 
-/// The "breathing" ring of Thinking Orbs' 64 pt preset (by Jakub Antalik, MIT, ThinkingOrbs-LICENSE.txt), ported from
-/// its engine: 11 lanes of 44 dots on a face-on circle whose radius undulates, depth-shaded and z-sorted, in a 64-unit
-/// square. Maple tints it like an opal, with a glint travelling round.
-nonisolated enum Orb {
-    struct Dot {
-        var x, y, z, radius, alpha: Double
+/// Maple's thinking light, drawn in Metal: one soft band of cyan light round a ring, its line and its width wavering on
+/// slow waves, with a sheen travelling round it. "Thinking" is a wide band that breathes; "idle", for the AI button at
+/// rest, a thin, slow ring.
+enum Aura {
+    /// Matches `Uniforms` in the shader. `shape` is the ring's radius and its band's width, in half-sides of the view,
+    /// and how far each wavers, as fractions of them.
+    struct Uniforms {
+        var resolution: SIMD2<Float>
+        var phase: Float
+        var brightness: Float
+        var shape: SIMD4<Float>
+        var dark: Float
     }
 
-    static let speed = 3.24  // the preset's clock multiplier
+    /// Radius, waver, width, width's waver. Calibration knobs, tuned by eye at 24 to 160 px; thinking's edge, 0.58 ×
+    /// 1.08 + 3 × 0.1 × 1.25 ≈ 1.0 half-sides out, is where its faint haze has faded to 1%.
+    static func shape(thinking: Bool) -> SIMD4<Float> { thinking ? [0.58, 0.08, 0.1, 0.25] : [0.42, 0.07, 0.06, 0.25] }
 
-    static func frame(at t: Double) -> [Dot] {
-        let center = 32.0, ringRadius = center * 0.78, cameraTilt = 0.3, wobble = 0.368
-        let baseRadius = ringRadius / (1 + 0.85 * 0.23 * wobble)  // lobes swell past the radius; keep them in the frame
-        let radiusScale = pow(64.0 / 300, 0.6)  // dot sizes were tuned at 300 pt
-        // Face-on: the band's plane is tilted back by exactly the camera's tilt, so it reads as a true circle.
-        let tilt = -cameraTilt
-        let v = (y: cos(tilt), z: sin(tilt)), n = (y: -sin(tilt), z: cos(tilt))
-        var dots: [Dot] = []
-        for lane in 0..<11 {
-            let offset = Double(lane - 5) * 0.075, edge = Double(abs(lane - 5)) / 5
-            for segment in 0..<44 {
-                let a = Double(segment) / 44 * 2 * .pi
-                let wave = (0.16 * sin(a * 3 - t * 1.7 + Double(lane) * 0.22) + 0.07 * sin(a * 5 + t * 1.1)) * wobble
-                let x = cos(a), y = v.y * sin(a) + n.y * offset, z = v.z * sin(a) + n.z * offset
-                let scale = baseRadius * (1 + wave) / (x * x + y * y + z * z).squareRoot()
-                let (px, py, pz) = (x * scale, y * scale, z * scale)
-                let depthZ = py * sin(cameraTilt) + pz * cos(cameraTilt)
-                let depth = (depthZ / ringRadius + 1) / 2
-                let fullness = 0.56 + 0.44 * Double(lane) / 10  // approved Fuller original preset
-                dots.append(Dot(x: center + px * fullness, y: center - (py * cos(cameraTilt) - pz * sin(cameraTilt)) * fullness, z: depthZ,
-                                radius: max(0.3, (1.0516 + 1.6252 * depth) * (1 - 0.25 * edge) * radiusScale) * 1.05,
-                                alpha: 0.4 + 0.6 * depth))
-            }
+    /// How fast the waves move, radians of phase per second.
+    static func speed(thinking: Bool) -> Float { thinking ? 1.2 : 0.4 }
+
+    static let breath = 1.2  // calibration knob: seconds per breath while thinking
+
+    /// Thinking breathes between 0.8 and 1.6 and back, once a `breath`; idle holds at 1.
+    static func brightness(thinking: Bool, at time: Double) -> Float {
+        guard thinking else { return 1 }
+        return Float(1.2 + 0.4 * sin(2 * .pi * time / breath))
+    }
+
+    static let device = MTLCreateSystemDefaultDevice()
+    static let queue = device?.makeCommandQueue()
+    // ponytail: compiled from source on first use (tens of ms, once); move to a .metal file if launch time matters.
+    static let pipeline: (any MTLRenderPipelineState)? = {
+        guard let device else { return nil }
+        do {
+            let library = try device.makeLibrary(source: source, options: nil)
+            let descriptor = MTLRenderPipelineDescriptor()
+            descriptor.vertexFunction = library.makeFunction(name: "auraVertex")
+            descriptor.fragmentFunction = library.makeFunction(name: "auraFragment")
+            descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+            return try device.makeRenderPipelineState(descriptor: descriptor)
+        } catch {
+            assertionFailure("Aura shader: \(error)")
+            return nil
         }
-        return dots.sorted { $0.z < $1.z }
+    }()
+
+    static let source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Uniforms { float2 resolution; float phase; float brightness; float4 shape; float dark; };
+
+    constant float3 inner = float3(0.20, 0.86, 0.98);  // cyan, on the band's inside
+    constant float3 outer = float3(0.18, 0.62, 0.98);  // blue, on its outside
+    constant float3 deep = float3(0.04, 0.40, 0.70);   // where the band is brightest, on paper
+
+    // One triangle that covers the view: (-1, -1), (3, -1), (-1, 3).
+    vertex float4 auraVertex(uint id [[vertex_id]]) {
+        return float4(id == 1 ? 3.0 : -1.0, id == 2 ? 3.0 : -1.0, 0.0, 1.0);
     }
 
-    static let opal: [SIMD3<Double>] = [[0.48, 0.77, 0.80], [0.63, 0.57, 0.81], [0.84, 0.64, 0.74], [0.84, 0.76, 0.55]]
-
-    /// Opal colours drifting round the ring, over a pearl base, lit by a glint that travels round it.
-    static func color(_ dot: Dot, at t: Double, dark: Bool) -> SIMD3<Double> {
-        let angle = atan2(dot.y - 32, dot.x - 32)
-        let tint = blend(opal, at: angle / (2 * .pi) + t * 0.014)
-        let glint = pow(max(0, cos(angle + t * 0.13)), 16)
-        let pearl: SIMD3<Double> = dark ? [0.80, 0.84, 0.89] : [0.31, 0.35, 0.42]
-        let lit = pearl + (tint - pearl) * (0.3 + 0.6 * glint)
-        return lit + ((dark ? [1, 1, 1] : [0.68, 0.73, 0.78]) - lit) * (glint * 0.5)
+    // How far the ring wavers at angle `a`, -1 to 1; `k` picks one of its waves. Only whole harmonics of the angle and
+    // the phase, so it closes round the ring, and the loop has no seam when the phase wraps at 2π.
+    float swing(float a, float phase, float k) {
+        return 0.5 * sin(3.0 * a + phase + 1.9 * k)
+             + 0.3 * sin(5.0 * a - 2.0 * phase + 3.1 * k)
+             + 0.2 * sin(2.0 * a + 3.0 * phase + 0.7 * k);
     }
 
-    /// The cyclic blend of `colors` at `position`, which wraps every 1.
-    static func blend(_ colors: [SIMD3<Double>], at position: Double) -> SIMD3<Double> {
-        let p = (position - position.rounded(.down)) * Double(colors.count)
-        let i = Int(p) % colors.count, f = p - p.rounded(.down)
-        return colors[i] + (colors[(i + 1) % colors.count] - colors[i]) * f
+    fragment float4 auraFragment(float4 position [[position]], constant Uniforms &u [[buffer(0)]]) {
+        float2 p = (position.xy - 0.5 * u.resolution) / (0.5 * min(u.resolution.x, u.resolution.y));
+        float r = length(p), a = atan2(p.y, p.x);
+        float radius = u.shape.x, wobble = u.shape.y, width = u.shape.z, uneven = u.shape.w;
+        float center = radius * (1.0 + wobble * swing(a, u.phase, 0.0));
+        float w = width * (1.0 + uneven * swing(a, u.phase, 2.0));
+        float d = (r - center) / w;
+        float d2 = d * d;
+        float body = exp(-d2 * d2);  // flat-topped, so the band has an edge
+        float haze = 0.15 * exp(-0.3 * d2);  // and a faint glow past it
+        float sheen = 0.65 + 0.35 * sin(2.0 * a - u.phase + 1.4 * d);  // brighter folds travel round the ring
+        float3 tint = mix(inner, outer, saturate(0.5 + 0.5 * d));
+        float3 light = tint * (body * sheen + haze) * u.brightness;
+        // Output is premultiplied: color no brighter than its alpha.
+        if (u.dark > 0.5) {
+            float3 glow = 1.0 - exp(-1.8 * light);
+            return float4(glow, max(glow.r, max(glow.g, glow.b)));
+        }
+        // On paper, light can't brighten white, so it shows as tinted ink: its hue at full strength, deepening where
+        // the band is brightest, and its amount as coverage.
+        float peak = max(light.r, max(light.g, light.b));
+        float cover = min(1.0 - exp(-1.8 * peak), 0.92);
+        float3 hue = mix(light / max(peak, 1e-4), deep, saturate(0.5 * (peak - 0.9)));
+        return float4(0.92 * hue * cover, cover);
     }
+    """
 }
 
 /// Grey cells about a 32nd of the box, with a soft diagonal wave and scattered grain.
@@ -82,16 +124,19 @@ nonisolated enum PixelGrid {
     }
 }
 
-/// A thinking animation: the opal orb in an answer's dot, or the pixel grid over a box being drawn in.
+/// A thinking animation: the Aura in an answer's dot, or the pixel grid over a box being drawn in.
 final class Thinking: UIView {
     enum Style { case orb, pixels }
     let style: Style
-    var time = 0.6
+    /// Aura's thinking state; false gives its calmer idle one.
+    var thinking = true { didSet { if window == nil { shape = Aura.shape(thinking: thinking) } } }
+    var time = 0.1  // a mid-pulse still frame under Reduce Motion
+    var phase: Float = 0
+    var shape = Aura.shape(thinking: true)
     var lastFrame = 0.0
     var link: CADisplayLink?
     var active = UIApplication.shared.applicationState == .active
-    let particles = CALayer()
-    var dots: [CAShapeLayer] = []
+    let aura = CAMetalLayer()
     let texture = CALayer()
     var cells: [CAShapeLayer] = []
     private var textureSize = CGSize.zero
@@ -104,14 +149,10 @@ final class Thinking: UIView {
         isOpaque = false
         isUserInteractionEnabled = false
         if style == .orb {
-            layer.addSublayer(particles)
-            let circle = CGPath(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2), transform: nil)
-            dots = (0..<484).map { _ in
-                let dot = CAShapeLayer()
-                dot.path = circle
-                particles.addSublayer(dot)
-                return dot
-            }
+            aura.device = Aura.device
+            aura.pixelFormat = .bgra8Unorm
+            aura.isOpaque = false
+            layer.addSublayer(aura)
         } else {
             layer.addSublayer(texture)
             cells = (0..<4).map { _ in
@@ -146,9 +187,7 @@ final class Thinking: UIView {
         super.layoutSubviews()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        particles.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        particles.bounds = CGRect(x: 0, y: 0, width: 64, height: 64)
-        particles.setAffineTransform(CGAffineTransform(scaleX: min(bounds.width, bounds.height) / 64, y: min(bounds.width, bounds.height) / 64))
+        aura.frame = bounds
         if style == .pixels, bounds.size != textureSize {
             textureSize = bounds.size
             // Four retained shades let Core Animation breathe the texture without repainting it during a pinch.
@@ -161,7 +200,9 @@ final class Thinking: UIView {
         }
         CATransaction.commit()
         let side = min(40 / pageZoom, min(bounds.width, bounds.height) * 0.65)
+        indicator?.pageZoom = pageZoom  // so its drawable matches its size on screen
         indicator?.frame = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
+        if style == .orb, link == nil { renderOrb() }
     }
 
     @objc func pause() { active = false; animate() }
@@ -198,7 +239,13 @@ final class Thinking: UIView {
     }
 
     func tick(_ link: CADisplayLink) {
-        if lastFrame > 0 { time += min(link.timestamp - lastFrame, 0.05) * Orb.speed }
+        if lastFrame > 0 {
+            let step = min(link.timestamp - lastFrame, 0.05)
+            time += step
+            // The waves only turn by whole multiples of the phase, so it wraps without a seam and keeps float precision.
+            phase = (phase + Float(step) * Aura.speed(thinking: thinking)).truncatingRemainder(dividingBy: 2 * .pi)
+            shape += (Aura.shape(thinking: thinking) - shape) * Float(min(1, step * 6))  // settles in about 0.5 s
+        }
         lastFrame = link.timestamp
         renderOrb()
     }
@@ -222,18 +269,28 @@ final class Thinking: UIView {
         CATransaction.commit()
     }
 
+    /// Draws one frame at the orb's size on screen; a page zoom on the box being drawn in doesn't resize it.
     func renderOrb() {
-        guard style == .orb else { return }
-        let dark = traitCollection.userInterfaceStyle == .dark
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for (layer, dot) in zip(dots, Orb.frame(at: time)) {
-            let c = Orb.color(dot, at: time, dark: dark)
-            layer.fillColor = UIColor(red: c.x, green: c.y, blue: c.z, alpha: dot.alpha).cgColor
-            layer.position = CGPoint(x: dot.x, y: dot.y)
-            layer.setAffineTransform(CGAffineTransform(scaleX: dot.radius, y: dot.radius))
-        }
-        CATransaction.commit()
+        guard style == .orb, let pipeline = Aura.pipeline else { return }
+        let scale = contentScaleFactor * pageZoom
+        let size = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
+        guard size.width > 0, size.height > 0 else { return }
+        if aura.drawableSize != size { aura.drawableSize = size }
+        guard let drawable = aura.nextDrawable(), let buffer = Aura.queue?.makeCommandBuffer() else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].loadAction = .dontCare  // the shader writes every pixel
+        pass.colorAttachments[0].storeAction = .store
+        guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        var uniforms = Aura.Uniforms(resolution: [Float(size.width), Float(size.height)], phase: phase,
+                                     brightness: Aura.brightness(thinking: thinking, at: time), shape: shape,
+                                     dark: traitCollection.userInterfaceStyle == .dark ? 1 : 0)
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Aura.Uniforms>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.endEncoding()
+        buffer.present(drawable)
+        buffer.commit()
     }
 
     /// The display link holds its target strongly; this keeps it from keeping a removed view alive.

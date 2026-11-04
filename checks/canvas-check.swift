@@ -332,24 +332,27 @@ struct Check {
     }
 
     static func interface() throws {
-        for time in [0.0, 0.6, 4, 20] {
-            let dots = Orb.frame(at: time)
-            precondition(dots.count == 484)
-            for dot in dots {
-                precondition([dot.x, dot.y, dot.radius, dot.alpha].allSatisfy(\.isFinite))
-                precondition(dot.x - dot.radius > 0 && dot.x + dot.radius < 64 && dot.y - dot.radius > 0 && dot.y + dot.radius < 64)
-            }
-            let opening = dots.map { hypot($0.x - 32, $0.y - 32) - $0.radius }.min()!
-            precondition((10...15).contains(opening), "Fuller original retains its smaller centre opening")
+        precondition(Aura.pipeline != nil, "the Aura shader compiles")
+        for time in stride(from: 0.0, through: 20, by: 0.05) {
+            precondition((0.7999...1.6001).contains(Aura.brightness(thinking: true, at: time)) && Aura.brightness(thinking: false, at: time) == 1)
         }
+        let breath = Aura.breath
+        precondition(abs(Aura.brightness(thinking: true, at: breath / 4) - 1.6) < 0.001 && abs(Aura.brightness(thinking: true, at: breath * 3 / 4) - 0.8) < 0.001,
+                     "thinking breathes 0.8 to 1.6 and back once a breath")
         for size: CGFloat in [24, 34, 40] {
             let orb = Thinking(style: .orb)
             orb.frame.size = CGSize(width: size, height: size)
             orb.layoutIfNeeded()
             orb.renderOrb()
-            precondition(orb.dots.count == 484 && orb.dots.allSatisfy { $0.path != nil }, "orb particles keep vector paths at small sizes")
-            precondition(abs(orb.particles.affineTransform().a - size / 64) < 0.001)
+            precondition(orb.aura.frame == orb.bounds && orb.aura.drawableSize.width == (size * orb.contentScaleFactor).rounded(),
+                         "the Aura draws at its size on screen")
         }
+        let loader = Thinking(style: .pixels)
+        loader.place(over: CGRect(x: 0, y: 0, width: 600, height: 400), turn: 0, zoom: 2)
+        loader.layoutIfNeeded()
+        loader.indicator!.layoutIfNeeded()
+        precondition(loader.indicator!.aura.drawableSize.width == (40 * loader.indicator!.contentScaleFactor).rounded(),
+                     "a zoomed page doesn't resize the indicator's drawable")
         let button = MapleButton(minimumWidth: 160)
         let presentations: [(String, MapleButton.Mark, String)] = [("Record", .symbol("mic"), ""), ("Allow mic", .loading, "×"), ("Recording", .waveform, "0:08"), ("Release to send", .symbol("arrow.up"), ""), ("Transcribing", .loading, "×"), ("Thinking", .orb, "×")]
         var widths: [CGFloat] = []
@@ -394,11 +397,12 @@ struct Check {
         precondition(controller.soundMaterial == .pencil, "disabling edits restores the pencil sound with the pen")
         controller.setAIEnabled(true)
         precondition(controller.toolButtons[2].isEnabled && !controller.aiButton.orb.isHidden)
+        precondition(!controller.aiButton.orb.thinking, "the AI button's Aura idles at rest")
         controller.cycle()
         precondition(controller.soundMaterial == .eraser)
         controller.cycle()
         precondition(controller.soundMaterial == .edit, "Pencil double-tap uses the same sound routing")
-        print("interface ok: fuller vector orb, stable voice states, touch targets, tool dock, AI toggle and adjacent status")
+        print("interface ok: Aura shader and pulse, idle AI button, stable voice states, touch targets, tool dock, AI toggle and adjacent status")
     }
 
     static func voicePlacement() throws {

@@ -318,6 +318,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
             aiButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
         ])
         aiButton.accessibilityIdentifier = "ai-toggle"
+        aiButton.orb.thinking = false  // at rest, the Aura idles
         aiButton.addAction(UIAction { [weak self] _ in self?.toggleAI() }, for: .primaryActionTriggered)
         setAIEnabled(Marks.aiEnabled)
         toolDock.spacing = 3
