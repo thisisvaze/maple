@@ -71,6 +71,10 @@
     h2 { margin: 0; font-family: var(--font-display); font-size: var(--text-section); font-weight: 400; line-height: 1.1; letter-spacing: -.035em; }
     h2 .signed { margin: 0 0 0 -.12em; font-size: 1.12em; letter-spacing: 0; }
     h2 .signed svg { margin-top: -.25em; }
+    /* Who wrote what, hard to miss: a pill for each hand. */
+    .ways-head .key { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: var(--space-lg); color: var(--color-ink); font-size: 1.0625rem; font-weight: 600; }
+    .key span { display: inline-flex; align-items: center; gap: .6rem; min-height: 44px; padding: 0 1.125rem 0 1rem; border: 1px solid var(--color-rule); border-radius: 999px; background: oklch(99.6% .004 90 / .75); }
+    .key span::before { content: ""; width: .8rem; height: .8rem; border-radius: 50%; background: var(--c); }
     .ways-head p { margin-top: var(--space-md); max-width: 30rem; color: var(--color-muted); line-height: 1.6; }
 
     /* The wall: a plain grid, or moving columns when motion is welcome. */
@@ -140,7 +144,7 @@
           <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>
         </a>
       </figure>
-      <p class="badge">Powered by <b>Meta Model API</b></p>
+      <p class="badge">Powered by <b>Meta AI</b></p>
     </section>
   </div>
 
@@ -149,6 +153,7 @@
       <div>
         <h2 id="ways-title">Think together with <span class="ink maple signed">Maple</span></h2>
         <p>No chat box, no prompts. A question mark, an equals sign, an empty box, a circle. Each one asks for something different.</p>
+        <p class="key"><span style="--c: var(--color-ink)">You</span><span style="--c: var(--color-blue)">Maple (AI)</span></p>
       </div>
     </div>
 
@@ -307,7 +312,7 @@
       <h2 id="end-title">Think on paper again.</h2>
       <div class="actions">
         <a class="cta" href="https://github.com/thisisvaze/maple"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
-        <a class="cta ghost" href="https://youtu.be/RCev1zyMf9k"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>Watch the film</a>
+        <a class="cta ghost" href="https://youtu.be/RCev1zyMf9k"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>Demo</a>
       </div>
       <p class="fine">You’ll need Xcode 27, an iPad with Apple Pencil, and Meta and TypeSafe API keys.</p>
     </div>
