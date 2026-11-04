@@ -1,8 +1,9 @@
+import PencilKit
 import UIKit
 import UniformTypeIdentifiers
 
-/// Procreate's Copy & Paste menu: swipe three fingers down the page, and a floating menu offers to copy the page for an AI,
-/// as JSON with all Maple knows, or as SVG. Tapping anywhere else closes it.
+/// Procreate's Copy & Paste menu: swipe three fingers down the page, and a floating menu at the bottom offers to copy the
+/// page for an AI, as JSON with all Maple knows, or as SVG, or to clear it. Tapping anywhere else closes it.
 final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
     static let reach: CGFloat = 70  // calibration knob: screen points three fingers travel down to call the menu
 
@@ -11,6 +12,7 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
     let shade = UIControl()  // takes the tap that closes the menu
     let panel = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     var held: (center: CGPoint, zoom: CGFloat, turn: CGFloat)?  // where the page was when the third finger came down
+    var clearButton: UIButton!
 
     /// Three fingers dragging, telling the moment the third lands, so the page can go back to where it was then.
     final class Swipe: UIPanGestureRecognizer {
@@ -37,9 +39,12 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
         shade.addAction(UIAction { [weak self] _ in self?.close() }, for: .touchDown)
         shade.isAccessibilityElement = false
         panel.cornerConfiguration = .uniformCorners(radius: .fixed(18))
+        clearButton = button("Clear Page", "trash", "Removes everything on the page, after asking") { [weak self] in self?.confirmClear() }
+        clearButton.isHidden = controller.page.isMe  // clearing it would forget everything at once
         let row = UIStackView(arrangedSubviews: [
             button("Copy for AI", "doc.on.clipboard", "The page, its answers and what Maple remembers, as JSON") { [weak self] in self?.copyJSON() },
             button("Copy SVG", "scribble.variable", "The page's ink and pictures as SVG") { [weak self] in self?.copySVG() },
+            clearButton,
         ])
         row.spacing = 4
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -54,7 +59,7 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
         controller.canvas.accessibilityCustomActions = [
             UIAccessibilityCustomAction(name: "Copy for AI") { [weak self] _ in self?.copyJSON(); return true },
             UIAccessibilityCustomAction(name: "Copy SVG") { [weak self] _ in self?.copySVG(); return true },
-        ]
+        ] + (controller.page.isMe ? [] : [UIAccessibilityCustomAction(name: "Clear Page") { [weak self] _ in self?.confirmClear(); return true }])
     }
 
     func button(_ title: String, _ image: String, _ hint: String, _ run: @escaping () -> Void) -> UIButton {
@@ -81,10 +86,11 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
         open()
     }
 
-    /// Shows the menu at the top of the screen, and puts the page back where it was when the third finger landed: two of
+    /// Shows the menu at the bottom of the screen, and puts the page back where it was when the third finger landed: two of
     /// them may have panned, pinched or turned it a little first.
     func open() {
         guard let c = controller, panel.superview == nil else { return }
+        clearButton.isEnabled = !c.canvas.drawing.strokes.isEmpty || !c.marks.notes.isEmpty
         c.navigation.isEnabled = false  // cancels it
         c.navigation.isEnabled = true
         if let held {
@@ -98,10 +104,10 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
         panel.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             panel.centerXAnchor.constraint(equalTo: c.view.safeAreaLayoutGuide.centerXAnchor),
-            panel.topAnchor.constraint(equalTo: c.view.safeAreaLayoutGuide.topAnchor, constant: 16),
+            panel.bottomAnchor.constraint(equalTo: c.view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
         ])
         panel.alpha = 0
-        panel.transform = UIAccessibility.isReduceMotionEnabled ? .identity : CGAffineTransform(translationX: 0, y: -7)
+        panel.transform = UIAccessibility.isReduceMotionEnabled ? .identity : CGAffineTransform(translationX: 0, y: 7)
         MapleStyle.animate(0.32) {
             self.panel.alpha = 1
             self.panel.transform = .identity
@@ -134,5 +140,21 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
         let svg = Export.svg(drawing: c.canvas.drawing, notes: c.marks.notes, pictures: c.page.pictures)
         board.items = [[UTType.svg.identifier: Data(svg.utf8), UTType.utf8PlainText.identifier: svg]]  // design tools take the SVG, text fields the text
         c.marks.flash("Copied as SVG")
+    }
+
+    func confirmClear() {
+        guard let c = controller else { return }
+        close()
+        let alert = UIAlertController(title: "Clear this page?", message: "Your writing and Maple's answers will be removed. Tap with two fingers to undo.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Clear Page", style: .destructive) { [weak self] _ in self?.clear() })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        c.present(alert, animated: true)
+    }
+
+    /// Removes all ink and every answer in one step of undo. Answers still on their way find their marks gone, as when
+    /// the person erases them, and pictures stay in the folder for undo.
+    func clear() {
+        guard let c = controller, let marks = c.marks else { return }
+        marks.apply(Marks.Change(remove: Set(c.canvas.drawing.strokes.map(Marks.id)), dropping: Set(marks.notes.map(\.id))))
     }
 }

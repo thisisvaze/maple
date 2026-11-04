@@ -951,7 +951,7 @@ struct Check {
         let controller = open(page), canvas = controller.canvas, marks = controller.marks!, menu = controller.quickMenu!
         precondition(!canvas.panGestureRecognizer.isEnabled && controller.navigation.isEnabled, "the page has one two-finger handler")
         precondition(controller.turner.gestureRecognizers?.contains { $0 === menu.swipe } == true && menu.swipe.minimumNumberOfTouches == 3)
-        precondition(canvas.accessibilityCustomActions?.map(\.name) == ["Copy for AI", "Copy SVG"], "and VoiceOver can reach the same")
+        precondition(canvas.accessibilityCustomActions?.map(\.name) == ["Copy for AI", "Copy SVG", "Clear Page"], "and VoiceOver can reach the same")
 
         // A page with the person's writing, an answer in Maple's ink, a picture, an edit mark, and something remembered.
         marks.memories = Memories(file: folder.appending(path: "memory.json"))
@@ -1020,10 +1020,21 @@ struct Check {
         menu.copySVG(to: board)
         precondition(board.data(forPasteboardType: UTType.svg.identifier).map { String(decoding: $0, as: UTF8.self) } == svg && board.string == svg, "copied as SVG, and as text")
         menu.open()
+        controller.view.layoutIfNeeded()
+        precondition(abs(menu.panel.frame.midX - controller.view.safeAreaLayoutGuide.layoutFrame.midX) < 1
+                     && abs(menu.panel.frame.maxY - controller.view.safeAreaLayoutGuide.layoutFrame.maxY + 16) < 1, "at the bottom center")
+        precondition(menu.clearButton.isEnabled && !menu.clearButton.isHidden, "a page with something on it can be cleared")
         menu.shade.sendActions(for: .touchDown)
         precondition(menu.shade.superview == nil, "a tap anywhere else closes it")
+
+        // Clearing takes all ink and every answer in one step of undo, and undo brings them all back.
+        let full = (canvas.drawing.strokes.count, marks.notes.count)
+        menu.clear()
+        precondition(canvas.drawing.strokes.isEmpty && marks.notes.isEmpty, "cleared")
+        controller.history.undo()
+        precondition(canvas.drawing.strokes.count == full.0 && marks.notes.count == full.1, "one undo brings it all back")
         UIPasteboard.remove(withName: board.name)
-        print("quick menu ok: three fingers down, JSON with memory and answers, SVG with pictures, copying, closing")
+        print("quick menu ok: three fingers down, bottom center, JSON with memory and answers, SVG with pictures, copying, clearing and undo, closing")
     }
 
     /// Draw, rest the pen, and it snaps: the page's side of what checks/shape-check.swift reads.
