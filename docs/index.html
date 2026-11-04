@@ -10,13 +10,14 @@
   <meta property="og:description" content="For visual thinkers who work ideas out with a pencil. Made for iPad and Apple Pencil.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://thisisvaze.github.io/maple/">
-  <meta property="og:image" content="https://thisisvaze.github.io/maple/icon.png">
+  <meta property="og:image" content="https://thisisvaze.github.io/maple/maple-workspace.webp">
+  <meta property="og:image:alt" content="An illustrated Maple workspace on iPad, with sketches and notes in graphite and blue ink.">
   <link rel="canonical" href="https://thisisvaze.github.io/maple/">
   <link rel="icon" type="image/png" href="icon.png">
   <link rel="apple-touch-icon" href="icon.png">
   <link rel="stylesheet" href="tokens.css">
   <style>
-    /* Hallmark · macrostructure: Long Document · theme: Atelier, existing Maple palette · tone: quiet · anchor hue: blue · nav: N9 · footer: Ft2 · enrichment: none */
+    /* Hallmark · macrostructure: Long Document · theme: Atelier, existing Maple palette · tone: quiet · anchor hue: blue · nav: N9 · footer: Ft2 · enrichment: generated workspace illustration */
     /* Hallmark · pre-emit critique: P4 H4 E4 S5 R5 V4 */
     * { box-sizing: border-box; }
     html, body { overflow-x: clip; }
@@ -37,6 +38,9 @@
     p { margin: 0; }
     .intro { margin-top: var(--space-lg); max-width: 36rem; font-size: var(--text-lead); line-height: 1.6; }
     .intro strong { font-weight: 600; }
+    .workspace { margin: var(--space-xl) 0; }
+    .workspace img { display: block; width: 100%; height: auto; border-radius: var(--radius-icon); }
+    .workspace figcaption { margin-top: var(--space-sm); color: var(--color-muted); font-size: var(--text-small); line-height: 1.6; }
     .examples { margin-block: var(--space-xl); }
     .examples > div { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: var(--space-md); align-items: baseline; margin-top: var(--space-lg); }
     dt { color: var(--color-blue); font-family: var(--font-display); font-size: var(--text-mark); line-height: 1; }
@@ -50,6 +54,9 @@
       .page { padding-block: var(--space-xl); }
       .examples > div { grid-template-columns: 3rem minmax(0, 1fr); }
     }
+    @media (min-width: 64rem) {
+      .workspace { margin-inline: calc(-1 * var(--space-xl)); }
+    }
   </style>
 </head>
 <body>
@@ -61,6 +68,10 @@
     <main>
       <h1>A notebook that thinks with you.</h1>
       <p class="intro">For <strong>visual thinkers</strong> who work ideas out with a pencil. Sketch a product, work through a problem, or plan what comes next. Maple thinks along, right on the page.</p>
+      <figure class="workspace">
+        <img src="maple-workspace.webp" width="1536" height="1024" fetchpriority="high" alt="Illustration of Maple on an iPad: a reading-corner floor plan, furniture sketches, material notes, and Maple’s blue suggestions beside graphite handwriting. A hand adds a sketch with Apple Pencil.">
+        <figcaption>Your ideas in graphite. Maple’s additions in blue.</figcaption>
+      </figure>
       <dl class="examples" aria-label="Ways to think with Maple">
         <div>
           <dt><span aria-hidden="true">?</span><span class="sr-only">Question mark</span></dt>
