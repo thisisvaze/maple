@@ -57,6 +57,7 @@ struct Gallery: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Settings", systemImage: "gearshape") { settings = true }
+                        .popover(isPresented: $settings, arrowEdge: .top) { SettingsPanel() }
                 }
                 if let selection {
                     ToolbarItem(placement: .topBarLeading) {
@@ -124,19 +125,6 @@ struct Gallery: View {
                     Memories.shared.change { $0.written(lines, page: page.url.lastPathComponent) }
                     try? Data().write(to: page.readFile)
                 }
-            }
-        }
-        .sheet(isPresented: $settings) {
-            NavigationStack {
-                Form {
-                    Section {
-                        Toggle("Ask Out Loud", isOn: $voiceInput)
-                    } footer: {
-                        Text("Squeeze and hold Apple Pencil Pro, ask out loud, and release to send. Your recording goes to Meta to transcribe and answer on your page, up to one minute at a time. You can also tap the microphone button.")
-                    }
-                }
-                .navigationTitle("Settings")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { settings = false } } }
             }
         }
         .fullScreenCover(item: $open, onDismiss: { pages = Page.all() }) { page in

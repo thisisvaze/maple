@@ -2,8 +2,10 @@ import SwiftUI
 
 @main
 struct MapleApp: App {
+    @AppStorage("appearance") private var appearance = SettingsPanel.Appearance.system
+
     var body: some Scene {
-        WindowGroup { Gallery() }
+        WindowGroup { Gallery().preferredColorScheme(appearance.colorScheme) }
     }
 }
 

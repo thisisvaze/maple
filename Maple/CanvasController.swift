@@ -303,6 +303,9 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         canvas.addGestureRecognizer(quickShape)
         quickMenu = QuickMenu(controller: self)
         pencilSound = PencilSound()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: CanvasController, _: UITraitCollection) in
+            (controller.turner as? UIWindow)?.overrideUserInterfaceStyle = controller.traitCollection.userInterfaceStyle
+        }
         controls.spacing = 3
         controls.alignment = .center
         controls.isLayoutMarginsRelativeArrangement = true
@@ -382,6 +385,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         super.viewDidAppear(animated)
         if !(turner is Turner), let scene = view.window?.windowScene {
             let window = Turner(windowScene: scene)
+            window.overrideUserInterfaceStyle = traitCollection.userInterfaceStyle
             window.controller = self
             window.windowLevel = .normal + 1
             moveCanvas(to: window)

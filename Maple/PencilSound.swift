@@ -7,6 +7,8 @@ import UIKit
 /// PencilKit. It mixes with music, respects the silent switch, and lets go of the audio session a moment after the pen
 /// lifts.
 final class PencilSound: NSObject {
+    let enabled = UserDefaults.standard.object(forKey: "pencilSounds") as? Bool ?? true
+    let volume = min(max(UserDefaults.standard.object(forKey: "pencilVolume") as? Double ?? 1, 0), 1)
     var suspended = false { didSet { if suspended { stop() } } }
     private let engine = AVAudioEngine()
     private let pen = Pen()
@@ -21,6 +23,7 @@ final class PencilSound: NSObject {
         let source = Self.source(pen, format: format)
         engine.attach(source)
         engine.connect(source, to: engine.mainMixerNode, format: format)
+        engine.mainMixerNode.outputVolume = Float(volume)
         engine.prepare()  // so the first stroke doesn't wait on the audio hardware
         for name in [AVAudioSession.interruptionNotification, AVAudioSession.routeChangeNotification, .AVAudioEngineConfigurationChange] {
             NotificationCenter.default.addObserver(self, selector: #selector(audioChanged), name: name, object: nil)
@@ -29,7 +32,7 @@ final class PencilSound: NSObject {
     }
 
     func touch(_ touch: UITouch, in view: UIView, material: PencilSynth.Material) {
-        guard !suspended else { return }
+        guard enabled, !suspended else { return }
         let pressure = Self.pressure(force: touch.force, maximumForce: touch.maximumPossibleForce)
         switch touch.phase {
         case .began:

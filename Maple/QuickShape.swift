@@ -30,6 +30,7 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
     init(controller: CanvasController) {
         self.controller = controller
         super.init(target: nil, action: nil)
+        isEnabled = UserDefaults.standard.object(forKey: "perfectShapes") as? Bool ?? true
         cancelsTouchesInView = false
         requiresExclusiveTouchType = false  // a finger counts while the Pencil is down
         delaysTouchesBegan = false
@@ -117,7 +118,7 @@ final class QuickShape: UIGestureRecognizer, UIGestureRecognizerDelegate {
 
     /// The pen has rested: if the stroke clearly is a shape, it stops being a stroke.
     func rested() {
-        guard let controller, snapped == nil, points.count > 1 else { return }
+        guard isEnabled, let controller, snapped == nil, points.count > 1 else { return }
         let canvas = controller.canvas, size = Shape.box(points)
         guard hypot(size.width, size.height) * canvas.zoomScale >= Self.smallest, let found = Shape.recognize(points, level: controller.marks.turn) else { return }
         // A disabled recognizer cancels the stroke under way, and the pen's touch stays with this one.
