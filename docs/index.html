@@ -4,92 +4,391 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#fdfcf8">
-  <title>Maple — A notebook that thinks with you</title>
-  <meta name="description" content="A notebook for visual thinkers who work ideas out with a pencil. Ask questions, explore diagrams, and refine your ideas right on the page. Made for iPad and Apple Pencil.">
-  <meta property="og:title" content="Maple — A notebook that thinks with you">
-  <meta property="og:description" content="For visual thinkers who work ideas out with a pencil. Made for iPad and Apple Pencil.">
+  <title>Maple · A notebook that thinks with you</title>
+  <meta name="description" content="A notebook for visual thinkers who work ideas out with a pencil. Make a mark, rest the pen, and Maple writes back in blue ink. Made for iPad and Apple Pencil.">
+  <meta property="og:title" content="Maple · A notebook that thinks with you">
+  <meta property="og:description" content="Make a mark, rest the pen, and Maple writes back in blue ink. Made for iPad and Apple Pencil.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://thisisvaze.github.io/maple/">
   <meta property="og:image" content="https://thisisvaze.github.io/maple/maple-app-flow-candid.webp">
-  <meta property="og:image:alt" content="An illustrated Maple workspace on iPad: app wireframes in graphite and a guest-booking flow in blue and violet.">
+  <meta property="og:image:alt" content="An illustrated Maple workspace on iPad: app wireframes in graphite and a guest-booking flow in blue.">
   <link rel="canonical" href="https://thisisvaze.github.io/maple/">
   <link rel="icon" type="image/png" href="icon.png">
   <link rel="apple-touch-icon" href="icon.png">
   <link rel="stylesheet" href="tokens.css">
   <style>
-    /* Hallmark · macrostructure: Long Document · theme: Atelier, existing Maple palette · tone: quiet · anchor hue: blue · nav: N9 · footer: Ft2 · enrichment: generated workspace illustration */
-    /* Hallmark · pre-emit critique: P4 H4 E4 S5 R5 V4 */
+    @font-face { font-family: "Maple Hand"; src: url("maple-hand.ttf") format("truetype"); font-display: swap; }
     * { box-sizing: border-box; }
-    html, body { overflow-x: clip; }
-    html { background: var(--color-paper); color: var(--color-ink); }
-    body { margin: 0; font-family: var(--font-body); -webkit-font-smoothing: antialiased; }
-    .page { max-width: 54rem; margin-inline: 0; padding: var(--space-xl) var(--space-lg); }
+    /* The film's paper: a faint tooth, tinted warm. */
+    html { background: var(--color-paper) url(paper.webp) 0 0 / 700px; background-blend-mode: multiply; color: var(--color-ink); }
+    body { margin: 0; font-family: var(--font-body); -webkit-font-smoothing: antialiased; overflow-x: clip; }
+    p { margin: 0; }
+    a { color: var(--color-blue); text-decoration-thickness: 1px; text-underline-offset: .25em; }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible, button:focus-visible { outline: 2px solid var(--color-blue); outline-offset: 4px; border-radius: 2px; }
+
+    .page { max-width: 48rem; margin-inline: auto; padding: var(--space-lg) var(--space-lg) 0; }
     header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-md); }
     .brand { display: flex; align-items: center; gap: var(--space-sm); font-size: var(--text-brand); font-weight: 600; letter-spacing: -.04em; }
     .brand img { border-radius: var(--radius-icon); }
-    a { color: var(--color-blue); text-decoration-thickness: 1px; text-underline-offset: .25em; }
-    header a, .source, footer a { white-space: nowrap; display: inline-flex; align-items: center; min-height: 44px; }
+    header a, .source, footer a { display: inline-flex; align-items: center; min-height: 44px; white-space: nowrap; }
     header a { font-size: var(--text-small); }
-    a:hover { text-decoration-thickness: 2px; }
-    a:active { opacity: .7; }
-    a:focus-visible { outline: 2px solid var(--color-blue); outline-offset: 5px; border-radius: 2px; }
-    main { padding-block: var(--space-hero) var(--space-xl); }
-    h1 { margin: 0; max-width: 14ch; font-family: var(--font-display); font-size: var(--text-display); font-weight: 400; line-height: 1.07; letter-spacing: -.045em; overflow-wrap: anywhere; min-width: 0; }
-    p { margin: 0; }
-    .intro { margin-top: var(--space-lg); max-width: 36rem; font-size: var(--text-lead); line-height: 1.6; }
-    .intro strong { font-weight: 600; }
-    .workspace { margin: var(--space-xl) 0; }
-    .workspace img { display: block; width: 100%; height: auto; border-radius: var(--radius-icon); }
-    .workspace figcaption { margin-top: var(--space-sm); color: var(--color-muted); font-size: var(--text-small); line-height: 1.6; }
-    .examples { margin-block: var(--space-xl); }
-    .examples > div { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: var(--space-md); align-items: baseline; margin-top: var(--space-lg); }
-    dt { color: var(--color-blue); font-family: var(--font-display); font-size: var(--text-mark); line-height: 1; }
-    dd { margin: 0; font-size: var(--text-body); line-height: 1.65; }
-    dd strong { font-weight: 600; }
-    .closing { max-width: 34rem; color: var(--color-muted); font-size: var(--text-body); line-height: 1.65; }
-    .source { margin-top: var(--space-lg); gap: var(--space-sm); font-size: var(--text-body); }
-    footer { border-top: 1px solid var(--color-rule); padding-block: var(--space-md); display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm) var(--space-lg); color: var(--color-muted); font-size: var(--text-small); line-height: 1.6; align-items: center; }
-    footer a { color: inherit; }
-    @media (min-width: 40rem) {
-      .page { padding: var(--space-xl); }
-      .examples > div { grid-template-columns: 3rem minmax(0, 1fr); }
+
+    .hero { padding-block: var(--space-hero) 0; }
+    .badge { display: inline-flex; align-items: center; margin-top: var(--space-lg); padding: .375rem .875rem; border: 1px solid var(--color-rule); border-radius: 999px; background: oklch(99.6% .004 90 / .6); color: var(--color-muted); font-size: var(--text-small); }
+    .badge::before { content: ""; margin-right: .5rem; width: .45rem; height: .45rem; border-radius: 50%; background: var(--color-blue); }
+    .badge b { margin-left: .3em; color: var(--color-ink); font-weight: 600; }
+    h1 { margin: 0; max-width: 14ch; font-family: var(--font-display); font-size: var(--text-display); font-weight: 400; line-height: 1.07; letter-spacing: -.045em; }
+    .way { margin-top: var(--space-xl); font-size: clamp(1.25rem, 2.5vw, 1.5rem); font-weight: 600; letter-spacing: -.02em; }
+    /* The last word, in Maple's hand: written in, held, faded, and the next one written. */
+    .rotor { margin-left: .04em; color: var(--color-blue); font-family: var(--font-hand); font-size: 1.2em; font-weight: 400; letter-spacing: 0; }
+    .rotor svg { margin-top: -.3em; }
+    .lead { margin-top: var(--space-lg); max-width: 34rem; font-size: var(--text-lead); line-height: 1.6; }
+    .cta { display: inline-flex; align-items: center; gap: .5rem; min-height: 48px; margin-top: var(--space-lg); padding: 0 1.25rem; border-radius: 999px; background: var(--color-ink); color: var(--color-paper); font-size: var(--text-body); font-weight: 600; text-decoration: none; box-shadow: 0 10px 24px -14px oklch(28% .01 155 / .7); transition: background .15s, transform .15s; }
+    .cta:hover { background: var(--color-blue); transform: translateY(-1px); }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-top: var(--space-xl); }
+    .hero-actions .cta { margin-top: 0; min-height: 44px; padding: 0 1.125rem; font-size: 1rem; }  /* one size down from .cta: 48 → 44 px tall */
+    .hero-actions .cta svg { width: 1.0625rem; height: 1.0625rem; }
+    .cta.soon, .cta.soon:hover { background: transparent; color: var(--color-muted); box-shadow: inset 0 0 0 1px var(--color-rule); cursor: not-allowed; transform: none; }
+    .cta.soon small { margin-left: .25rem; padding: .125rem .5rem; border-radius: 999px; background: oklch(28% .01 155 / .07); font-size: .75rem; font-weight: 600; }
+    .cta:active { transform: none; opacity: .85; }
+    .cta svg { width: 1.125rem; height: 1.125rem; fill: currentColor; }
+    .shot { margin: var(--space-2xl) 0 0; }
+    .film { position: relative; display: block; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--radius-icon); background: var(--color-device); box-shadow: 0 1px 0 var(--color-rule), 0 24px 48px -32px oklch(28% .01 155 / .45); }
+    .film img, .film iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; object-fit: cover; }
+    /* The play button: a glass circle in the middle of the frame, nothing else. */
+    .play { position: absolute; left: 50%; top: 50%; display: grid; place-items: center; width: 5rem; height: 5rem; border-radius: 50%; translate: -50% -50%;
+      background: oklch(100% 0 0 / .32); -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4);
+      border: 1px solid oklch(100% 0 0 / .65); box-shadow: 0 12px 32px -12px oklch(28% .01 155 / .45), inset 0 1px 0 oklch(100% 0 0 / .8);
+      color: var(--color-ink); transition: scale .25s cubic-bezier(.2, .7, .2, 1), background .2s; }
+    .play svg { width: 1.75rem; height: 1.75rem; margin-left: .2rem; fill: currentColor; }
+    .film:hover .play { scale: 1.07; background: oklch(100% 0 0 / .5); }
+    .film:focus-visible .play { outline: 2px solid var(--color-blue); outline-offset: 4px; }
+    .shot figcaption { margin-top: var(--space-sm); color: var(--color-muted); font-size: var(--text-small); }
+
+    .ways { padding-block: var(--space-section) 0; }
+    .ways-head { max-width: 48rem; margin-inline: auto; padding-inline: var(--space-lg); display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: var(--space-md); }
+    h2 { margin: 0; font-family: var(--font-display); font-size: var(--text-section); font-weight: 400; line-height: 1.1; letter-spacing: -.035em; }
+    h2 .signed { margin: 0 0 0 -.12em; font-size: 1.12em; letter-spacing: 0; }
+    h2 .signed svg { margin-top: -.25em; }
+    .ways-head p { margin-top: var(--space-md); max-width: 30rem; color: var(--color-muted); line-height: 1.6; }
+
+    /* The wall: a plain grid, or moving columns when motion is welcome. */
+    .wall { --gap: 1.25rem; max-width: 78rem; margin: var(--space-2xl) auto 0; padding-inline: var(--space-lg);
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--gap); align-items: start; }
+    .wall.moving { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); height: min(46rem, 85vh); overflow: hidden;
+      mask-image: linear-gradient(transparent, #000 12%, #000 88%, transparent); }
+    .col { animation: rise var(--speed) linear infinite; }
+    .col.down { animation-direction: reverse; }
+    .track { display: grid; gap: var(--gap); padding-bottom: var(--gap); }
+    @keyframes rise { to { transform: translateY(-50%); } }
+
+    .card { position: relative; display: grid; gap: .75rem; padding: 1.25rem 1.25rem 1.5rem; background: oklch(99.6% .004 90 / .6); border: 1px solid var(--color-rule); border-radius: .875rem; }
+    .cap { font-size: .8125rem; font-weight: 600; color: var(--color-muted); }
+    .ink { font-family: var(--font-hand); font-size: var(--text-hand); line-height: 1.35; }
+    .you { color: var(--color-ink); }
+    .maple { color: var(--color-blue); padding-left: .75rem; }
+    .edit { color: var(--color-coral); }
+    .you .reply { display: inline-block; }
+    .card :is(.you, .edit) svg.hand { display: inline-block; }
+    .card svg, .card img { display: block; width: 100%; height: auto; }
+    .card svg.hand { width: auto; overflow: visible; }
+    .you .reply svg.hand { display: inline-block; }
+    .card img { border-radius: .375rem; }
+    .paint { position: relative; aspect-ratio: 3 / 2; }
+    .paint img, .paint svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .paint img { object-fit: cover; border-radius: 0; }
+    .card .paint svg { overflow: visible; }
+    .struck { text-decoration: line-through; text-decoration-color: var(--color-coral); text-decoration-thickness: 2px; }
+    .bubble { justify-self: start; margin-left: .75rem; padding: .375rem .75rem; border: 1.5px solid var(--color-blue); border-radius: 1rem 1rem 1rem .25rem; }
+    .muted-ink { opacity: .35; }
+
+
+    .end { max-width: 48rem; margin: var(--space-section) auto 0; padding-inline: var(--space-lg); }
+    .sheet { padding: clamp(3rem, 8vw, 5.5rem) clamp(1.5rem, 5vw, 3rem); text-align: center; background: oklch(99.6% .004 90 / .7); border: 1px solid var(--color-rule); border-radius: 1.25rem; box-shadow: 0 30px 60px -48px oklch(28% .01 155 / .5); }
+    .end-icon { display: block; width: 7.5rem; height: auto; margin: 0 auto var(--space-lg); }
+    .kicker { color: var(--color-muted); font-size: var(--text-small); }
+    .end h2 { margin-top: var(--space-md); }
+    .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-sm); margin-top: var(--space-xl); }
+    .cta.ghost { background: transparent; color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-rule); }
+    .cta.ghost:hover { background: transparent; color: var(--color-blue); box-shadow: inset 0 0 0 1px var(--color-blue); }
+    .fine { margin-top: var(--space-xl); color: var(--color-muted); font-size: var(--text-small); line-height: 1.6; }
+    footer { width: min(45rem, 100% - 2 * var(--space-lg)); margin: var(--space-2xl) auto 0; padding-block: var(--space-xl); border-top: 1px solid var(--color-rule); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-sm); color: var(--color-muted); font-size: var(--text-small); }
+
+    @media (prefers-reduced-motion: reduce) {
+      .col { animation: none; }
     }
   </style>
 </head>
 <body>
+
   <div class="page">
     <header>
-      <span class="brand"><img src="icon.png" alt="" width="44" height="44">Maple</span>
+      <span class="brand"><img src="icon.png" width="44" height="44" alt="">Maple</span>
       <a href="https://github.com/thisisvaze/maple">GitHub <span aria-hidden="true">&nbsp;↗</span></a>
     </header>
-    <main>
+    <section class="hero">
       <h1>A notebook that thinks with you.</h1>
-      <p class="intro">For <strong>visual thinkers</strong> who work ideas out with a pencil. Sketch a product, work through a problem, or plan what comes next. Maple thinks along, right on the page.</p>
-      <figure class="workspace">
-        <img src="maple-app-flow-candid.webp" width="1536" height="1024" fetchpriority="high" alt="Concept image of Maple on an iPad: rough app wireframes in graphite lead to a question about skipping signup. Maple adds a guest-booking path through confirmation in blue and violet ink.">
-        <figcaption>Your ideas in graphite. Maple’s additions in blue and violet.</figcaption>
+      <p class="way"><span class="sr-only">A new way to ideate, sketch, prototype, think, plan, philosophize, brainstorm, learn, design, solve, write, imagine, explore and wonder.</span><span aria-hidden="true">A new way to <span class="rotor" data-words="ideate,sketch,prototype,think,plan,philosophize,brainstorm,learn,design,solve,write,imagine,explore,wonder">ideate.</span></span></p>
+      <div class="hero-actions">
+        <a class="cta" href="https://github.com/thisisvaze/maple"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>View on GitHub</a>
+        <span class="cta soon" role="link" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Download for iPad<small>Coming soon</small></span>
+      </div>
+      <figure class="shot">
+        <a class="film" href="https://youtu.be/RCev1zyMf9k" aria-label="Play Maple in 72 seconds, on YouTube">
+          <img src="maple-showcase-poster.webp" width="1920" height="1080" alt="">
+          <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>
+        </a>
       </figure>
-      <dl class="examples" aria-label="Ways to think with Maple">
-        <div>
-          <dt><span aria-hidden="true">?</span><span class="sr-only">Question mark</span></dt>
-          <dd><strong>Write a question.</strong> Lift the pencil, and Maple writes an answer beside it.</dd>
-        </div>
-        <div>
-          <dt><span aria-hidden="true">□</span><span class="sr-only">Empty box</span></dt>
-          <dd><strong>Draw an empty box.</strong> Maple fills it with a diagram, a graph, or a picture, from the words around it.</dd>
-        </div>
-        <div>
-          <dt><span aria-hidden="true">↗</span><span class="sr-only">Edit mark</span></dt>
-          <dd><strong>Mark what you want to change.</strong> Circle part of Maple’s work with the edit brush and write what you have in mind.</dd>
-        </div>
-      </dl>
-      <p class="closing">Keep your pencil on the page. Your sketches, questions, and ideas stay together as the thought takes shape.</p>
-      <a class="source" href="https://github.com/thisisvaze/maple">Explore Maple on GitHub <span aria-hidden="true">↗</span></a>
-    </main>
-    <footer>
-      <p>Made for iPad and Apple Pencil.</p>
-      <a href="https://github.com/thisisvaze">Made by Vaze <span aria-hidden="true">&nbsp;↗</span></a>
-    </footer>
+      <p class="badge">Powered by <b>Meta Model API</b></p>
+    </section>
   </div>
+
+  <section class="ways" aria-labelledby="ways-title">
+    <div class="ways-head">
+      <div>
+        <h2 id="ways-title">Think together with <span class="ink maple signed">Maple</span></h2>
+        <p>No chat box, no prompts. A question mark, an equals sign, an empty box, a circle. Each one asks for something different.</p>
+      </div>
+    </div>
+
+    <div class="wall">
+      <article class="card">
+        <p class="cap">Question mark</p>
+        <p class="ink you">why does dough rise?</p>
+        <p class="ink maple reply">yeast breathes out CO₂; gluten traps it.</p>
+      </article>
+      <article class="card">
+        <p class="cap">Empty box</p>
+        <p class="ink you">login screen</p>
+        <svg class="reply" viewBox="0 0 220 150" role="img" aria-label="Maple draws a login form in your box in blue pencil: email and password fields and a soft yellow Log in button.">
+          <rect x="4" y="4" width="212" height="142" rx="3" fill="none" stroke="var(--color-ink)" stroke-width="1.5"/>
+          <g fill="none" stroke="var(--color-blue)" stroke-width="1.4" stroke-linecap="round">
+            <path d="M28 44 L193 43 L194 66 L29 67 Z M29 78 L194 77 L193 100 L28 101 Z"/>
+            <path d="M29 112 L194 111 L193 134 L28 135 Z" fill="var(--color-pencil-yellow)"/>
+          </g>
+          <g fill="var(--color-blue)" font-family="Maple Hand, cursive" font-size="14">
+            <text x="110" y="30" text-anchor="middle" font-size="17">Welcome</text>
+            <text x="38" y="60">email</text><text x="38" y="94">password</text>
+            <text x="110" y="128" text-anchor="middle">Log in</text>
+          </g>
+        </svg>
+      </article>
+      <article class="card">
+        <p class="cap">Blank after =</p>
+        <p class="ink you">75% of 486 g = <span class="maple reply" style="padding:0">364.5 g</span></p>
+        <p class="ink you">R = <span class="maple reply" style="padding:0; --d:.6s">8.314 J/(mol·K)</span></p>
+      </article>
+      <article class="card">
+        <p class="cap">Two question marks</p>
+        <p class="ink you">why is e<sup>iπ</sup> = −1 ??</p>
+        <p class="ink maple reply" style="--d:1s">e<sup>iθ</sup> is a turn of θ around the circle; turn by π and you land on −1.</p>
+      </article>
+      <article class="card">
+        <p class="cap">A word with two meanings</p>
+        <p class="ink you">Mercury □</p>
+        <p class="ink maple reply" style="--d:.4s">the planet or the element?</p>
+      </article>
+      <article class="card">
+        <p class="cap">Trail off</p>
+        <p class="ink you">1, 1, 2, 3, 5 … <span class="maple reply" style="padding:0">8, 13, 21</span></p>
+        <p class="ink you">passport, keys … <span class="maple reply" style="padding:0; --d:.8s">charger, adapter</span></p>
+      </article>
+      <article class="card">
+        <p class="cap">A painting</p>
+        <p class="ink you">Lisbon at dusk □</p>
+        <div class="paint reply" role="img" aria-label="Maple sketches in your box while it paints, then the picture appears: Lisbon at dusk, with a yellow tram, tiled buildings and a violet sky over the river."><img src="lisbon-at-dusk.webp" width="1536" height="1024" loading="lazy" alt=""></div>
+      </article>
+      <article class="card">
+        <p class="cap">Numbers, worked out</p>
+        <p class="ink you">x<sup>x</sup> = 64 ? <span class="maple reply" style="padding:0">≈ 3.399</span></p>
+        <p class="ink you">250 ml in cups ? <span class="maple reply" style="padding:0; --d:.6s">1.057 cups</span></p>
+      </article>
+      <article class="card">
+        <p class="cap">Tap twice</p>
+        <p class="ink you">Occam’s razor ··</p>
+        <p class="ink maple reply" style="--d:1.4s">pick the simplest story that still fits the facts.</p>
+      </article>
+      <article class="card">
+        <p class="cap">Circle what you’d change</p>
+        <svg viewBox="0 0 220 120" role="img" aria-label="On Maple’s login form you circle the Log in button with the coral edit brush and write: sign up plus log in. Maple redraws it as two buttons, Sign up and Log in.">
+          <g fill="none" stroke="var(--color-blue)" stroke-width="1.4" stroke-linecap="round">
+            <path d="M24 12 L196 11 L197 32 L25 33 Z"/>
+            <path d="M25 44 L196 43 L195 64 L24 65 Z" fill="var(--color-pencil-yellow)"/>
+          </g>
+          <g fill="var(--color-blue)" font-family="Maple Hand, cursive" font-size="13">
+            <text x="34" y="27">email</text><text x="110" y="59" text-anchor="middle">Log in</text>
+          </g>
+          <path class="mark" d="M20 47 C30 30 192 30 206 48 C222 78 22 86 12 62 C9 55 14 49 26 45" fill="none" stroke="var(--color-coral)" stroke-width="1.8" stroke-linecap="round"/>
+          <text class="mark" x="20" y="104" fill="var(--color-coral)" font-family="Maple Hand, cursive" font-size="17">sign up + log in</text>
+        </svg>
+        <svg class="reply" style="--d:2s" viewBox="0 0 220 70" aria-hidden="true">
+          <g fill="none" stroke="var(--color-blue)" stroke-width="1.4" stroke-linecap="round">
+            <path d="M24 12 L196 11 L197 32 L25 33 Z"/>
+            <path d="M25 44 L104 43 L103 64 L24 65 Z M116 44 L196 43 L195 64 L115 65 Z" fill="var(--color-pencil-yellow)"/>
+          </g>
+          <g fill="var(--color-blue)" font-family="Maple Hand, cursive" font-size="13" text-anchor="middle">
+            <text x="54" y="27" text-anchor="start" dx="-20">email</text><text x="64" y="59">Sign up</text><text x="156" y="59">Log in</text>
+          </g>
+        </svg>
+      </article>
+      <article class="card">
+        <p class="cap">Exact text</p>
+        <p class="ink you">IMO 2022 Q1 ?</p>
+        <p class="ink maple reply" style="--d:.8s">The Bank of Oslo issues two types of coin: aluminium (A) and bronze (B)…</p>
+      </article>
+      <article class="card">
+        <p class="cap">Squeeze and ask out loud</p>
+        <p class="ink you muted-ink">y = x²</p>
+        <p class="ink you">“what’s the slope here?”</p>
+        <p class="ink maple bubble reply" style="--d:1s">2 at x = 1: it rises 2 for every 1 across.</p>
+      </article>
+      <article class="card">
+        <p class="cap">A computed picture</p>
+        <p class="ink you">hydrogen atom □</p>
+        <svg class="reply" style="--d:.5s" viewBox="0 0 220 120" role="img" aria-label="Maple draws the hydrogen 1s orbital as its computed density cloud, densest at the center and fading outward.">
+          <defs><radialGradient id="cloud"><stop offset="0" stop-color="var(--color-blue)" stop-opacity=".85"/><stop offset=".35" stop-color="var(--color-blue)" stop-opacity=".3"/><stop offset="1" stop-color="var(--color-blue)" stop-opacity="0"/></radialGradient></defs>
+          <circle cx="110" cy="60" r="56" fill="url(#cloud)"/>
+          <circle cx="110" cy="60" r="2.5" fill="var(--color-paper)"/>
+          <text x="196" y="112" fill="var(--color-blue)" font-family="Maple Hand, cursive" font-size="14" text-anchor="end">|ψ₁ₛ|² ∝ e^(−2r/a₀)</text>
+        </svg>
+      </article>
+      <article class="card">
+        <p class="cap">Strike and say why</p>
+        <p class="ink maple">yeast breathes out CO₂; <span class="struck">gluten traps it.</span></p>
+        <p class="ink edit">simpler</p>
+        <p class="ink maple reply" style="--d:1.2s">yeast makes gas; the dough holds it in.</p>
+      </article>
+      <article class="card">
+        <p class="cap">Ask to draw</p>
+        <p class="ink you">“draw me a graph of sin x”</p>
+        <svg class="reply" style="--d:.3s" viewBox="0 0 220 100" role="img" aria-label="Maple frames a box in a clear spot and plots sin x inside it.">
+          <rect x="4" y="4" width="212" height="92" rx="3" fill="none" stroke="var(--color-blue)" stroke-width="1.4"/>
+          <path d="M16 50 H204 M24 14 V86" stroke="var(--color-blue)" stroke-width="1" opacity=".5"/>
+          <path d="M24 50 Q47 6 70 50 T116 50 T162 50 T208 50" fill="none" stroke="var(--color-blue)" stroke-width="1.8" stroke-linecap="round"/>
+          <text x="168" y="24" fill="var(--color-blue)" font-family="Maple Hand, cursive" font-size="14">sin x</text>
+        </svg>
+      </article>
+      <article class="card">
+        <p class="cap">Repaint just one part</p>
+        <svg viewBox="0 0 220 90" role="img" aria-label="On Maple’s painting of hills under the sun, you circle the sun with the edit brush and write moon. Maple repaints only the sky: the same hills, now under a crescent moon.">
+          <rect x="0" y="0" width="220" height="90" rx="6" fill="oklch(93% .05 85)"/>
+          <path d="M0 90 V62 Q50 34 104 60 Q150 40 220 58 V90 Z" fill="oklch(64% .1 140)"/>
+          <circle cx="160" cy="26" r="11" fill="oklch(82% .14 80)"/>
+          <path class="mark" d="M146 20 C150 6 178 8 177 26 C176 44 146 44 143 30 C142 24 146 19 152 16" fill="none" stroke="var(--color-coral)" stroke-width="2" stroke-linecap="round"/>
+          <text class="mark" x="184" y="22" fill="var(--color-coral)" font-family="Maple Hand, cursive" font-size="16">moon</text>
+        </svg>
+        <svg class="reply" style="--d:1.6s" viewBox="0 0 220 90" aria-hidden="true">
+          <rect x="0" y="0" width="220" height="90" rx="6" fill="oklch(32% .06 270)"/>
+          <path d="M0 90 V62 Q50 34 104 60 Q150 40 220 58 V90 Z" fill="oklch(36% .06 160)"/>
+          <path d="M160 14 A13 13 0 1 0 170 36 A15 15 0 0 1 160 14 Z" fill="oklch(94% .04 95)"/>
+        </svg>
+      </article>
+      <article class="card">
+        <p class="cap">Ask about Maple’s ink</p>
+        <p class="ink maple">x = e<sup>W(ln 64)</sup> ≈ 3.399</p>
+        <p class="ink you">check?</p>
+        <p class="ink maple reply" style="--d:1s">3.399<sup>3.399</sup> ≈ 64.0, so it holds.</p>
+      </article>
+      <article class="card">
+        <p class="cap">The Me page</p>
+        <p class="ink maple">prefers hints before answers</p>
+        <p class="ink maple">likes grids over lists</p>
+        <p class="ink maple"><span class="struck">new to baking</span></p>
+        <p class="ink you">Strike a line, and Maple forgets it.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="end" aria-labelledby="end-title">
+    <div class="sheet">
+      <img class="end-icon" src="maple-mark.webp" width="480" height="265" alt="Maple">
+      <p class="kicker">No screenshots, no switching apps, no retyping.</p>
+      <h2 id="end-title">Think on paper again.</h2>
+      <div class="actions">
+        <a class="cta" href="https://github.com/thisisvaze/maple"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+        <a class="cta ghost" href="https://youtu.be/RCev1zyMf9k"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>Watch the film</a>
+      </div>
+      <p class="fine">You’ll need Xcode 27, an iPad with Apple Pencil, and Meta and TypeSafe API keys.</p>
+    </div>
+  </section>
+  <footer>
+    <p>A Meta AI Hackathon project.</p>
+    <a href="https://thisisvaze.com">Made with ❤️ and ☕ by Aaditya</a>
+  </footer>
+
+  <script src="hand.js"></script>
+  <script src="person.js"></script>
+  <script src="ink.js"></script>
+  <script>
+    const still = matchMedia('(prefers-reduced-motion: reduce)');
+    // Paper sounds, quiet: a pen click on press, an eraser on what isn't ready.
+    const sfx = (() => {
+      let ctx, buffers = {};
+      const load = () => {
+        if (ctx) return;
+        ctx = new AudioContext();
+        for (const name of ['click', 'eraser'])
+          fetch(`sounds/${name}.mp3`).then(r => r.arrayBuffer()).then(b => ctx.decodeAudioData(b)).then(d => buffers[name] = d).catch(() => {});
+      };
+      addEventListener('pointerdown', load, {once: true, capture: true});
+      addEventListener('keydown', load, {once: true, capture: true});
+      return (name, volume) => {
+        if (!ctx || !buffers[name]) return;
+        if (ctx.state === 'suspended') ctx.resume();
+        const src = ctx.createBufferSource(), gain = ctx.createGain();
+        src.buffer = buffers[name];
+        src.playbackRate.value = .94 + Math.random() * .12;  // no two the same, like a real pen
+        gain.gain.value = volume;
+        src.connect(gain).connect(ctx.destination);
+        src.start();
+      };
+    })();
+    const on = (selector, type, fn) => document.querySelectorAll(selector).forEach(el => el.addEventListener(type, fn));
+    on('.cta:not(.soon), .film, header a', 'click', () => sfx('click', .45));
+    on('.cta.soon', 'click', () => sfx('eraser', .35));
+    // The film loads YouTube only when asked for, and plays at once.
+    document.querySelector('.film').addEventListener('click', e => {
+      if (location.protocol === 'file:') return;  // YouTube refuses embeds without a referrer (error 153): open it there instead
+      e.preventDefault();
+      const frame = Object.assign(document.createElement('iframe'), {
+        src: 'https://www.youtube-nocookie.com/embed/RCev1zyMf9k?autoplay=1&rel=0&playsinline=1&iv_load_policy=3&color=white',
+        title: 'Maple in 72 seconds', referrerPolicy: 'strict-origin-when-cross-origin', allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowFullscreen: true,
+      });
+      e.currentTarget.replaceWith(Object.assign(document.createElement('div'), {className: 'film'}));
+      document.querySelector('.shot .film').append(frame);
+    });
+
+    // Deal the cards into columns that drift up and down, each one looped twice.
+    const wall = document.querySelector('.wall');
+    const cards = [...wall.children];
+    cards.forEach((card, i) => card.dataset.phase = (i * 2.3) % 9);
+
+    function lay() {
+      const w = innerWidth;
+      const n = still.matches ? 0 : w < 640 ? 1 : w < 960 ? 2 : w < 1240 ? 3 : 4;
+      if (wall.dataset.cols === String(n)) return;
+      wall.dataset.cols = n;
+      if (!n) { wall.classList.remove('moving'); wall.replaceChildren(...cards); return; }
+      const tracks = Array.from({length: n}, () => Object.assign(document.createElement('div'), {className: 'track'}));
+      cards.forEach((card, i) => tracks[i % n].append(card));
+      wall.replaceChildren(...tracks.map((track, i) => {
+        const col = Object.assign(document.createElement('div'), {className: i % 2 ? 'col down' : 'col'});
+        col.style.setProperty('--speed', `${track.children.length * 14 + i * 6}s`);  // calibration knob: seconds per card, per loop
+        const copy = track.cloneNode(true);
+        copy.setAttribute('aria-hidden', 'true');
+        copy.inert = true;
+        col.append(track, copy);
+        return col;
+      }));
+      wall.style.setProperty('--cols', n);
+      wall.classList.add('moving');
+    }
+    let inked = 0;
+    const relay = () => { lay(); clearTimeout(inked); inked = setTimeout(() => inkAll(document.querySelector('.wall'), !still.matches), 60); };
+    document.fonts.load('22px "Maple Hand"').finally(() => { relay(); document.querySelectorAll('.signed').forEach(el => sign(el, !still.matches)); cycle(document.querySelector('.rotor'), !still.matches); });
+    addEventListener('resize', relay);
+    still.addEventListener('change', relay);
+  </script>
 </body>
 </html>
