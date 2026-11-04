@@ -990,16 +990,6 @@ final class Marks {
         defer { asking -= 1 }
         let start = ContinuousClock.now
         let anchor = Self.anchor(box, zoom).applying(CGAffineTransform(rotationAngle: -turn))
-        // Muse Image starts on line art for the box at once, from the close-up or the spoken request, while Spark reads
-        // the box: when Spark draws it in ink, the painting's traced lines and fills take the place of Spark's freehand
-        // strokes. A reply to Maple's question has no label in its close-up, so it keeps Spark's own ink.
-        let lineArt: Task<Data?, Never>? = asked == nil ? painter.map { painter in
-            Task { [near] in
-                if let request { return try? await painter.lineArt(request, ratio: box.size) }
-                return try? await painter.lineArt(from: near, ratio: box.size)
-            }
-        } : nil
-        defer { lineArt?.cancel() }
         do {
             var drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, request: request, memory: memory, page: page)
             guard active else { return }
@@ -1013,17 +1003,19 @@ final class Marks {
                 done()
                 return askFirst(drawing, trigger: trigger, anchor: anchor, box: box, turn: turn, zoom: zoom)
             }
-            if drawing.kind == "ink", let art = await lineArt?.value {
+            // When Spark asks for line art, it gives only labels, and Muse Image paints what Spark said: its traced lines and
+            // fills are the drawing. Muse Image never guesses from the page: shown equations, it painted butterflies (4 Nov).
+            // A painting that fails, or has no lines, leaves the orange dot to try again.
+            if drawing.kind == "ink", !drawing.lineArt.isEmpty {
+                guard let painter else { throw Plot.Failure("No Muse Image key for line art") }
+                let art = try await painter.lineArt(drawing.lineArt, ratio: box.size)
                 guard active else { return }
                 guard present(trigger) else { return done() }
                 let start = ContinuousClock.now
-                if let traced = await Self.traced(art, box.size, palette: AgentPen.fills.mapValues(AgentPen.rgb)) {
-                    // Spark's labels stay, in their own parts; its freehand strokes give way to the painting's.
-                    drawing.parts = traced + drawing.parts.compactMap { $0.labels.isEmpty ? nil : Drawing.Part(name: $0.name, strokes: [], labels: $0.labels) }
-                    logger.notice("traced strokes=\(traced[0].strokes.count) fills=\(traced.count - 1) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
-                }
+                guard let traced = await Self.traced(art, box.size, palette: AgentPen.fills.mapValues(AgentPen.rgb)) else { throw Plot.Failure("The line art had no lines to trace") }
+                drawing.parts = traced + drawing.parts.compactMap { $0.labels.isEmpty ? nil : Drawing.Part(name: $0.name, strokes: [], labels: $0.labels) }
+                logger.notice("traced strokes=\(traced[0].strokes.count) fills=\(traced.count - 1) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             }
-            lineArt?.cancel()  // drawn some other way: the painting isn't needed
             let picture = try await paint(drawing, size: box.size)
             guard active else { return }
             guard present(trigger) else { return done() }

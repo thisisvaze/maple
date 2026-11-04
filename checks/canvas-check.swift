@@ -241,6 +241,7 @@ struct Check {
         try await moving()
         try await boxes()
         try await reading()
+        try await lineArt()
         try me()
         try snapping()
         try quickMenu()
@@ -1448,6 +1449,56 @@ struct Check {
         print("readings ok: marks kept as facts, lines read again as they grow, one call for the page, what models see, turned pages, erased ink, saving, Copy for AI, trimming")
     }
 
+    /// An ink drawing Muse asks to have painted is traced from the painting: its lines and fills take the place of
+    /// Muse's strokes, Muse's labels stay, and with no line art asked for, Muse's own drawing stands.
+    static func lineArt() async throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = Page(url: folder, edited: .now)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+            Offline.lock.withLock { Offline.painting = nil }
+        }
+        UserDefaults.standard.set([2150.0, 3100.0, 1.0], forKey: page.viewportKey)
+        let controller = open(page), canvas = controller.canvas, marks = controller.marks!
+        URLProtocol.registerClass(Offline.self)
+        let agent = Agent(muse: Muse(key: "offline"))
+        (marks.agent, marks.painter) = (agent, MuseImage(key: "offline"))
+        // Line art: a yellow apple in a black ring.
+        let art = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 400), format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }()).pngData { c in
+            UIColor.white.setFill(); c.fill(CGRect(x: 0, y: 0, width: 600, height: 400))
+            UIColor(red: 0xF7 / 255, green: 0xDC / 255, blue: 0x6E / 255, alpha: 1).setFill(); c.cgContext.fillEllipse(in: CGRect(x: 200, y: 60, width: 260, height: 260))
+            UIColor.black.setStroke(); c.cgContext.setLineWidth(10); c.cgContext.strokeEllipse(in: CGRect(x: 200, y: 60, width: 260, height: 260))
+        }
+        Offline.lock.withLock { Offline.painting = art.base64EncodedString() }
+        let box = CGRect(x: 2000, y: 3000, width: 300, height: 200)
+        let frame = PKStroke(ink: controller.pen.ink, path: AgentPen.stroke([CGPoint(x: 2000, y: 3000), CGPoint(x: 2300, y: 3000), CGPoint(x: 2300, y: 3200),
+                                                                          CGPoint(x: 2000, y: 3200), CGPoint(x: 2000, y: 3000)], width: 3, step: 2).path)
+        canvas.drawing.strokes.append(frame)
+        func drawn(lineArt: String) async -> Drawing {
+            Offline.reply(#"{"reading": "apple", "kind": "ink", "say": "an apple", "parts": [{"name": "apple", "strokes": [[[60, 60], [240, 60], [240, 150]]], "labels": [{"text": "apple", "x": 20, "y": 20, "size": 12}]}], "plot": {"expression": "", "xMin": 0, "xMax": 0, "yMin": 0, "yMax": 0}, "lineArt": "\#(lineArt)"}"#)
+            await marks.draw(agent, Data([0]), Data([0]), threads: [], trigger: [Marks.id(frame)], box: box, turn: 0, zoom: 1)
+            marks.flush()
+            return marks.notes.last!.source!
+        }
+        let traced = await drawn(lineArt: "a round apple")
+        precondition(traced.parts.first?.name == "drawing" && traced.parts.first!.strokes.count >= 1, "the painting's lines first: \(traced.parts.map(\.name))")
+        precondition(traced.parts.contains { $0.fill == "yellow" && $0.role == "fill" }, "its colour as a fill with no line of its own")
+        precondition(traced.parts.contains { $0.name == "apple" && $0.strokes.isEmpty && $0.labels.map(\.text) == ["apple"] }, "Muse's label stays, its strokes go")
+        precondition(!marks.strokes(of: marks.notes.last!).isEmpty, "inked on the page")
+        let own = await drawn(lineArt: "")
+        precondition(own.parts.map(\.name) == ["apple"] && own.parts[0].strokes.count == 1, "no line art asked for: Muse's own drawing")
+        // A painting with no lines in it leaves the orange dot to try again, and no drawing.
+        Offline.lock.withLock { Offline.painting = nil }
+        let notes = marks.notes.count
+        _ = await drawn(lineArt: "a round apple")
+        precondition(marks.notes.count == notes && marks.bubbles.contains { $0.retry != nil }, "a failed painting can be tried again")
+        marks.stop()
+        print("line art ok: traced lines and fills in place of Muse's strokes, labels kept, Muse's own drawing without line art, a failed painting to try again")
+    }
+
     static func boxes() async throws {
         let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -1633,6 +1684,7 @@ nonisolated final class Offline: URLProtocol, @unchecked Sendable {
     static let lock = NSLock()
     nonisolated(unsafe) static var queued: [String] = []
     nonisolated(unsafe) static var served = 0
+    nonisolated(unsafe) static var painting: String?  // base64 of what Muse Image hands back; a dot when nil
     static var requests: Int { lock.withLock { served } }
     static func reply(_ text: String) { lock.withLock { queued.append(text) } }
 
@@ -1641,7 +1693,7 @@ nonisolated final class Offline: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
     override func startLoading() {
         guard !request.url!.path.contains("/images/") else {  // Muse Image: a dot of a picture
-            let dot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+            let dot = Self.lock.withLock { Self.painting } ?? "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: ["data": [["b64_json": dot]]]))
             client?.urlProtocolDidFinishLoading(self)

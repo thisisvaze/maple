@@ -51,6 +51,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
     var computed = Computed()
     var picture = Picture()
     var question = ""  // kind ask: what Maple writes beside the box
+    var lineArt = ""  // kind ink: what Muse Image paints for the app to trace into its lines (see Trace); empty when Muse draws it itself
     /// How its lines are drawn: 0 as before 4 Nov, `handDrawn` as a hand draws them. A saved drawing keeps the style it
     /// was inked in, because edits find its ink again by redrawing its lines.
     var style = 0
@@ -397,6 +398,7 @@ nonisolated extension Drawing {
         computed = try saved.decodeIfPresent(Computed.self, forKey: .computed) ?? Computed()
         picture = try saved.decodeIfPresent(Picture.self, forKey: .picture) ?? Picture()
         question = try saved.decodeIfPresent(String.self, forKey: .question) ?? ""
+        lineArt = try saved.decodeIfPresent(String.self, forKey: .lineArt) ?? ""
         style = try saved.decodeIfPresent(Int.self, forKey: .style) ?? 0
         labeled = try saved.decodeIfPresent(Bool.self, forKey: .labeled) ?? false
         if saved.contains(.parts) {

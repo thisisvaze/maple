@@ -21,15 +21,7 @@ nonisolated struct MuseImage: Sendable {
     /// with no text, which image models garble; Muse writes the labels.
     static let lineArt = "Simple, clean line drawing, like a careful notebook sketch: confident black outlines of even width, and flat colour fills only in pale yellow (#F7DC6E), soft green (#7FC48E), light blue (#86B4EC) or pink (#F09BBD) where colour helps; everything else white. White background. No shading, gradients, texture or shadows, and no text, letters or numbers."
 
-    /// Line art of what a box's label asks for, read from the close-up itself (the box in red, its label in dark ink),
-    /// at about `ratio`, so a box the person drew is painted without waiting for Muse Spark to read it (9 s, 4 Nov).
-    func lineArt(from closeUp: Data, ratio: CGSize) async throws -> Data {
-        try await post("edits", ["prompt": "This is a close-up of a notebook page: an empty box drawn in red, and the handwritten label or writing it belongs to in dark ink. On a plain white page with nothing else, draw what the label asks for, filling the box's shape. " + Self.lineArt + " Leave out the box and the label.",
-                                 "size": Self.size(ratio), "tool_enablement": Self.tools(false),
-                                 "images": [["image_url": "data:image/png;base64," + closeUp.base64EncodedString()]]])
-    }
-
-    /// Line art of `subject`, for a box Maple framed for a spoken request, at about `ratio`.
+    /// Line art of `subject`, as Muse Spark describes it for an ink drawing, at about `ratio`.
     func lineArt(_ subject: String, ratio: CGSize) async throws -> Data {
         try await post("generations", ["prompt": subject + ". " + Self.lineArt, "size": Self.size(ratio), "tool_enablement": Self.tools(false)])
     }
