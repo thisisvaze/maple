@@ -45,6 +45,11 @@ final class Marks {
     var drawingIn: [Written] = []  // over drawings while they draw themselves in
     var pictures: [PictureView] = []  // under the ink
     var sketches: [(view: Thinking, box: CGRect, turn: CGFloat)] = []  // in boxes being drawn in
+    var readings: [Reading] = []  // what Maple has read of the ink, saved in readings.json; see Reading
+    var reader: Task<Void, Never>?  // reads new writing once the pen has rested a while
+    // Calibration knobs: the rest before new writing is read, the pieces read in one call, the ink around each, and the
+    // most readings a model is given at once.
+    static let readAfter: Duration = .seconds(2.5), readBatch = 12, readPad: CGFloat = 8, seenMost = 80
     var waiting: Task<Void, Never>?
     var lastTrigger: [String] = []
     var asking = 0
@@ -113,6 +118,7 @@ final class Marks {
         self.canvas = canvas
         self.page = page
         self.notes = notes
+        readings = Reading.load(page.readingsFile)
         lastShown = Set(notes.compactMap(\.memory))
         sync()
         if agent == nil { logger.error("No MODEL_API_KEY in Secrets.xcconfig: marks are off") }
@@ -180,7 +186,7 @@ final class Marks {
         navigating = false
         flush()
         closed = true
-        [waiting, settling, flushing, editWait].forEach { $0?.cancel() }
+        [waiting, settling, flushing, editWait, reader].forEach { $0?.cancel() }
         work.values.forEach { $0.cancel() }
     }
 
@@ -189,7 +195,7 @@ final class Marks {
         guard self.enabled != enabled else { return }
         self.enabled = enabled
         guard !enabled else { return }
-        [waiting, flushing, editWait].forEach { $0?.cancel() }
+        [waiting, flushing, editWait, reader].forEach { $0?.cancel() }
         work.values.forEach { $0.cancel() }
         pending.removeAll()
         editing.removeAll()
@@ -336,6 +342,7 @@ final class Marks {
         if let line = struckLine(mark, by: trigger, turn: turn) { return scratch(line, trigger) }  // no need to ask anyone
         let asked = question(answeredBy: mark, turn: turn, zoom: zoom)  // the box and the question go in the close-up with the reply
         let (marked, near, around, threads) = sight(selected, focus: asked.map { mark.union(Self.reach($0, turn: turn)) } ?? mark, turn: turn)
+        let seen = seen(in: around, turn: turn)
         let middle = CGPoint(x: mark.midX, y: mark.midY).applying(reading.inverted()), reach = max(mark.width, mark.height) / 2 + 60 / zoom
         let target = notes.filter { Self.distance(middle, $0) <= reach }.min { Self.distance(middle, $0) < Self.distance(middle, $1) }?.id
         let anchor = Self.anchor(mark, zoom).applying(reading.inverted()), view = (screen: screen, avoid: [pagesCorner])
@@ -360,19 +367,21 @@ final class Marks {
                 }
                 logger.notice("jev mark=\(gesture, privacy: .public) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             }
+            record(trigger, kind: gesture, rect: mark, turn: turn)
             switch gesture {
             case _ where asked != nil && gesture != "scribble" && gesture != "strike":
                 if let asked, let box = asked.asked {
-                    await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: asked.trigger, box: box.box, turn: box.turn, zoom: asked.zoom, asked: asked, reply: trigger, memory: memory)
+                    await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: asked.trigger, box: box.box, turn: box.turn, zoom: asked.zoom, asked: asked, reply: trigger,
+                               memory: memory, page: seen)
                 }
             case "question", "double_question", "equals", "dots", "bullet":  // the orb shows from the moment Jev sees the mark
                 await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, anchor: anchor,
-                          turn: turn, zoom: zoom, view: view, bubble: add(Bubble(anchor: anchor, zoom: zoom, turn: turn)), memory: memory)
+                          turn: turn, zoom: zoom, view: view, bubble: add(Bubble(anchor: anchor, zoom: zoom, turn: turn)), memory: memory, page: seen)
             case "double_dot":
                 await ask(agent, nearPNG, aroundPNG, gesture: gesture, threads: threads, target: target, trigger: trigger, anchor: anchor,
-                          turn: turn, zoom: zoom, view: view, bubble: thinking, memory: memory)
+                          turn: turn, zoom: zoom, view: view, bubble: thinking, memory: memory, page: seen)
             case "frame":
-                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, turn: turn, zoom: zoom, memory: memory)
+                await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: trigger, box: mark, turn: turn, zoom: zoom, memory: memory, page: seen)
             case "scribble", "strike":  // scratching out an answer or a drawing removes it
                 if let note = answer(touching: trigger) { scratch(note, trigger) }
             case "writing" where sure, "other" where sure:  // writing over an answer fades it under the writing
@@ -400,6 +409,86 @@ final class Marks {
         let around = screen.reduce(near) { $0.union(CGRect(origin: $1.applying(reading), size: .zero)) }
         let threads = notes.filter { around.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
         return (marked.transformed(using: reading), near, around, threads)
+    }
+
+    /// Keeps what Jev saw in `trigger`, in place of any older reading of its strokes, and reads its words soon if it's
+    /// writing.
+    func record(_ trigger: [String], kind: String, rect: CGRect, turn: CGFloat) {
+        readings = Reading.replacing(readings, with: Reading(strokes: trigger, kind: kind, text: nil, rect: rect, turn: turn))
+        saveReadings()
+        if readings.last?.unread == true { readSoon() }
+    }
+
+    /// What Muse read in a mark it answered or a box it filled: the words of the reading of exactly `trigger`.
+    func read(_ trigger: [String], as text: String) {
+        guard let i = readings.lastIndex(where: { $0.strokes == trigger }), readings[i].text != text else { return }
+        readings[i].text = text
+        saveReadings()
+    }
+
+    /// What Maple has read inside `around`, in the frame turned by `turn`, for a model looking at its picture: readings
+    /// whose ink is all still on the page, top to bottom, boxed in that picture's pixels. Writing with no words yet, or
+    /// none at all, says nothing and is left out.
+    func seen(in around: CGRect, turn: CGFloat) -> [Agent.Seen] {
+        let present = Set(canvas.drawing.strokes.map(Self.id)), scale = Self.scale(around)
+        let useful = readings.filter { present.isSuperset(of: $0.strokes) && (!Reading.worded.contains($0.kind) || !($0.text ?? "").isEmpty) }
+        let placed = useful.map { ($0, $0.rect(in: turn)) }.filter { $0.1.intersects(around) }.sorted { ($0.1.minY, $0.1.minX) < ($1.1.minY, $1.1.minX) }
+        return placed.prefix(Self.seenMost).map { reading, rect in
+            let r = rect.intersection(around).offsetBy(dx: -around.minX, dy: -around.minY)
+            return Agent.Seen(kind: reading.kind, text: reading.text.flatMap { $0.isEmpty ? nil : $0 },
+                              at: [r.minX, r.minY, r.width, r.height].map { Double(($0 * scale).rounded()) })
+        }
+    }
+
+    /// Reads the writing no one has read yet once the pen has rested `readAfter`; each new piece starts the wait again.
+    func readSoon() {
+        reader?.cancel()
+        reader = Task { [weak self] in
+            try? await Task.sleep(for: Self.readAfter)
+            guard !Task.isCancelled else { return }
+            await self?.readPending()
+        }
+    }
+
+    /// One Muse call for up to `readBatch` pieces of unread writing whose ink is all on the page, each pictured alone,
+    /// so nothing around it is read into it. A piece read again meanwhile, as its line grew, waits for its own turn.
+    func readPending() async {
+        guard active, let agent else { return }
+        let strokes = canvas.drawing.strokes, present = Set(strokes.map(Self.id))
+        let pending = Array(readings.filter { $0.unread && present.isSuperset(of: $0.strokes) }.suffix(Self.readBatch))
+        guard !pending.isEmpty else { return }
+        let pieces = pending.map { reading in
+            let ids = Set(reading.strokes)
+            let alone = PKDrawing(strokes: strokes.filter { ids.contains(Self.id($0)) }).transformed(using: CGAffineTransform(rotationAngle: reading.turn))
+            return (alone, reading.rect.insetBy(dx: -Self.readPad, dy: -Self.readPad))
+        }
+        let pngs = await Self.pictures(pieces)
+        guard active else { return }
+        do {
+            let texts = try await agent.read(pngs.enumerated().map { (id: "\($0.offset + 1)", png: $0.element) })
+            guard active else { return }
+            for (i, reading) in pending.enumerated() {
+                guard let text = texts["\(i + 1)"], let at = readings.firstIndex(of: reading) else { continue }
+                readings[at].text = text
+            }
+            saveReadings()
+            logger.notice("read pieces=\(pending.count)")
+            if readings.contains(where: { $0.unread && present.isSuperset(of: $0.strokes) }) { readSoon() }
+        } catch {
+            logger.error("read failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @concurrent nonisolated static func pictures(_ pieces: [(PKDrawing, CGRect)]) async -> [Data] { pieces.map { png($0.0, $0.1) } }
+
+    /// Saves the readings beside the notes, keeping at most `Reading.kept`.
+    func saveReadings() {
+        readings = Reading.trimmed(readings, present: Set(canvas.drawing.strokes.map(Self.id)))
+        let readings = readings, url = page.readingsFile
+        Store.queue.async {
+            do { try JSONEncoder().encode(readings).write(to: url, options: .atomic) }
+            catch { logger.error("readings save failed: \(error.localizedDescription, privacy: .public)") }
+        }
     }
 
     /// Brief recognition feedback in the same surface as the other small confirmations.
@@ -451,7 +540,8 @@ final class Marks {
     /// for a double dot, opened at once; a bullet with no room after it is being filled in by hand, and is left alone.
     /// The dot is the thinking orb meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?, trigger: [String],
-             anchor: CGPoint, turn: CGFloat, zoom: CGFloat, view: (screen: [CGPoint], avoid: [[CGPoint]]), bubble: Bubble?, memory: [Memory.Line] = []) async {
+             anchor: CGPoint, turn: CGFloat, zoom: CGFloat, view: (screen: [CGPoint], avoid: [[CGPoint]]), bubble: Bubble?, memory: [Memory.Line] = [],
+             page: [Agent.Seen] = []) async {
         guard active, present(trigger) else { return remove(bubble) }
         asking += 1
         defer { asking -= 1 }
@@ -460,9 +550,11 @@ final class Marks {
             // The answer streams: a tap on the thinking dot opens what's arrived, Muse's summary of its thinking first.
             bubble?.preview = nil
             let progress: @Sendable (String, String) -> Void = { thinking, reply in Task { @MainActor in bubble?.preview = reply.isEmpty ? thinking : reply } }
-            let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target, memory: memory, tools: Connections.functions, progress: progress)
+            let answer = try await agent.ask(near: near, around: around, gesture: gesture, threads: threads, target: target, memory: memory, page: page,
+                                             tools: Connections.functions, progress: progress)
             logger.notice("answered gesture=\(gesture, privacy: .public) passage=\(answer.passage) searched=\(answer.searched) calculated=\(answer.calculated) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             guard active else { return }
+            if gesture != "double_dot" { read(trigger, as: answer.reading) }  // a double dot's reading is of the ink around it
             learn(answer, evidence: answer.reading)
             guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
             let note = Note(mark: gesture, trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading, reply: answer.reply, turn: turn)
@@ -500,7 +592,8 @@ final class Marks {
         let threads = notes.filter { area.contains($0.anchor.applying(reading)) }.map { Agent.Thread(id: $0.id, reading: $0.reading, answer: $0.reply) }
         let (closeUp, around) = await Self.crops(canvas.drawing.transformed(using: reading), near, area)
         try Task.checkCancellation()
-        let answer = try await agent.ask(near: closeUp, around: around, gesture: "voice", threads: threads, target: nil, speech: transcript, memory: memories.memory.lines, tools: Connections.functions)
+        let answer = try await agent.ask(near: closeUp, around: around, gesture: "voice", threads: threads, target: nil, speech: transcript, memory: memories.memory.lines,
+                                         page: seen(in: area, turn: turn), tools: Connections.functions)
         try Task.checkCancellation()
         guard active else { throw CancellationError() }
         learn(answer, evidence: transcript)
@@ -571,7 +664,8 @@ final class Marks {
                 run { [self] in
                     let (nearPNG, aroundPNG) = await Self.crops(marked, near, around)
                     guard !Task.isCancelled else { return }
-                    await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: [id], box: box, turn: angle, zoom: zoom, request: asked.request, memory: memory)
+                    await draw(agent, nearPNG, aroundPNG, threads: threads, trigger: [id], box: box, turn: angle, zoom: zoom, request: asked.request, memory: memory,
+                               page: seen(in: around, turn: angle))
                 }
             }
         }
@@ -881,7 +975,7 @@ final class Marks {
     /// again. `asked` is that question, when the strokes `reply` answer it: both go as the box fills. `request` is what the
     /// person asked for out loud, when Maple drew the box.
     func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, turn: CGFloat, zoom: CGFloat,
-              asked: Note? = nil, reply: [String] = [], request: String? = nil, memory: [Memory.Line] = []) async {
+              asked: Note? = nil, reply: [String] = [], request: String? = nil, memory: [Memory.Line] = [], page: [Agent.Seen] = []) async {
         guard active, present(trigger) else { return }
         // The box's own lines, in its points from its top-left, so the sketch follows them and not its label.
         let inBox = CGAffineTransform(rotationAngle: turn).concatenating(CGAffineTransform(translationX: -box.minX, y: -box.minY))
@@ -892,8 +986,9 @@ final class Marks {
         let start = ContinuousClock.now
         let anchor = Self.anchor(box, zoom).applying(CGAffineTransform(rotationAngle: -turn))
         do {
-            var drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, request: request, memory: memory)
+            var drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, request: request, memory: memory, page: page)
             guard active else { return }
+            read(trigger, as: drawing.reading)  // the box's label
             guard present(trigger) else { return done() }
             // A box the person drew sits under their label; one Maple framed for a spoken request is its own ink and has none.
             drawing.labeled = !canvas.drawing.strokes.contains { trigger.contains(Self.id($0)) && AgentPen.wrote($0) }
@@ -933,7 +1028,8 @@ final class Marks {
             let failed = add(Bubble(anchor: anchor, zoom: zoom, turn: turn))
             failed.retry = { [weak self, weak failed] in
                 self?.remove(failed)
-                self?.run { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, turn: turn, zoom: zoom, asked: asked, reply: reply, request: request, memory: memory) }
+                self?.run { await self?.draw(agent, near, around, threads: threads, trigger: trigger, box: box, turn: turn, zoom: zoom, asked: asked, reply: reply, request: request,
+                                             memory: memory, page: page) }
             }
         }
     }
@@ -1141,7 +1237,8 @@ final class Marks {
             asking += 1
             defer { asking -= 1 }
             let start = ContinuousClock.now
-            let result = try await agent.edit(near: near, around: around, targets: targets, speech: speech, previous: previous, memory: memories.memory.lines)
+            let result = try await agent.edit(near: near, around: around, targets: targets, speech: speech, previous: previous, memory: memories.memory.lines,
+                                              page: seen(in: Self.editArea(batch).around, turn: batch.turn))
             guard active else { return }
             logger.notice("edited targets=\(targets.count) edits=\(result.edits.count) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
             if let question = result.question?.trimmingCharacters(in: .whitespacesAndNewlines), !question.isEmpty {

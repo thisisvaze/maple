@@ -3,7 +3,7 @@
 //   sed -n '1p;/^extension UIColor/,$p' Maple/MapleApp.swift > "$CHECK_DIR/Colors.swift"
 //   xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios26.0-simulator -swift-version 6 \
 //     -default-isolation MainActor -enable-upcoming-feature NonisolatedNonsendingByDefault -parse-as-library \
-//     Maple/{Interface,CanvasController,PencilSound,PencilSynth,QuickMenu,Export,QuickShape,Shape,Voice,Transcribe,Gmail,Connections,Marks,Bubble,Written,Note,Page,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
+//     Maple/{Interface,CanvasController,PencilSound,PencilSynth,QuickMenu,Export,QuickShape,Shape,Voice,Transcribe,Gmail,Connections,Marks,Bubble,Written,Note,Page,Readings,History,Memory,Grouping,Agent,Muse,MuseImage,Drawing,Figure,Computed,Hershey,Handwriting,Room,AgentPen,Jev,Thinking}.swift \
 //     "$CHECK_DIR/Colors.swift" checks/canvas-check.swift -o "$CHECK_DIR/Check.app/canvas-check"
 //   plutil -create xml1 "$CHECK_DIR/Check.app/Info.plist"
 //   plutil -insert CFBundleIdentifier -string dev.maple.canvas-check "$CHECK_DIR/Check.app/Info.plist"
@@ -240,6 +240,7 @@ struct Check {
         try await brush()
         try await moving()
         try await boxes()
+        try await reading()
         try me()
         try snapping()
         try quickMenu()
@@ -1384,6 +1385,69 @@ struct Check {
     }
 
     /// An empty box, filled every way but ink: a painted picture, a computed one, an exact figure, and a question first.
+    /// What Maple reads is kept as facts: the marks Jev named, writing read once in one call for the page, and what a
+    /// model then gets, boxed in its picture's pixels, with only ink still on the page.
+    static func reading() async throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = Page(url: folder, edited: .now)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        UserDefaults.standard.set([2150.0, 3100.0, 1.0], forKey: page.viewportKey)
+        let controller = open(page), canvas = controller.canvas, marks = controller.marks!
+        URLProtocol.registerClass(Offline.self)
+        marks.agent = Agent(muse: Muse(key: "offline"))
+        func pen(_ points: [CGPoint]) -> PKStroke { PKStroke(ink: controller.pen.ink, path: AgentPen.stroke(points, width: 3, step: 2).path) }
+        let hotel = pen([CGPoint(x: 2000, y: 3000), CGPoint(x: 2100, y: 3010)]), taxi = pen([CGPoint(x: 2000, y: 3040), CGPoint(x: 2080, y: 3050)])
+        let arrow = pen([CGPoint(x: 2120, y: 3005), CGPoint(x: 2200, y: 3005)])
+        canvas.drawing = PKDrawing(strokes: [hotel, taxi, arrow])
+        let id = Marks.id, around = CGRect(x: 1900, y: 2900, width: 400, height: 300)
+        marks.record([id(hotel)], kind: "writing", rect: CGRect(x: 2000, y: 2995, width: 60, height: 20), turn: 0)
+        marks.record([id(hotel)], kind: "writing", rect: CGRect(x: 2000, y: 2995, width: 100, height: 20), turn: 0)  // the line grew
+        marks.record([id(taxi)], kind: "writing", rect: CGRect(x: 2000, y: 3035, width: 80, height: 20), turn: 0)
+        marks.record([id(arrow)], kind: "arrow", rect: CGRect(x: 2120, y: 3000, width: 80, height: 10), turn: 0)
+        precondition(marks.readings.count == 3 && marks.readings.filter(\.unread).count == 2, "a line read again replaces its shorter reading; an arrow has no words")
+        precondition(marks.seen(in: around, turn: 0).map(\.kind) == ["arrow"], "writing says nothing until it's read")
+
+        // One call reads both lines, each pictured alone.
+        let before = Offline.requests
+        Offline.reply(#"{"pieces": [{"id": "1", "text": "Hotel 412"}, {"id": "2", "text": "Taxi 38"}]}"#)
+        await marks.readPending()
+        precondition(Offline.requests == before + 1 && marks.readings.compactMap(\.text) == ["Hotel 412", "Taxi 38"], "read in one call: \(marks.readings)")
+        await marks.readPending()
+        precondition(Offline.requests == before + 1, "nothing left to read, nothing asked")
+
+        // A model gets what's been read around it, top to bottom, boxed in its picture's pixels; a mark Muse answered
+        // keeps what Muse read in it.
+        marks.read([id(arrow)], as: "to the station")
+        let seen = marks.seen(in: around, turn: 0), scale = Marks.scale(around)
+        precondition(seen.map(\.text) == ["Hotel 412", "to the station", "Taxi 38"] && seen[0].at == [100, 95, 100, 20].map { Double(($0 * scale).rounded()) },
+                     "what a model is given: \(seen)")
+        let turned = marks.readings[0].rect(in: .pi / 2)
+        precondition(abs(turned.width - 20) < 0.01 && abs(turned.height - 100) < 0.01, "carried into a quarter turn: \(turned)")
+
+        // Erased ink is read to no one, but its reading stays for undo.
+        canvas.drawing = PKDrawing(strokes: [hotel, arrow])
+        precondition(marks.seen(in: around, turn: 0).compactMap(\.text) == ["Hotel 412", "to the station"] && marks.readings.count == 3, "erased: \(marks.readings)")
+
+        // Kept beside the page, and in Copy for AI with only what's still on it.
+        marks.saveReadings()
+        Store.queue.sync {}
+        precondition(Reading.load(page.readingsFile) == marks.readings, "saved beside the notes")
+        let json = try Export.json(title: "Trip", viewport: [], drawing: canvas.drawing, notes: [], memory: marks.memories.memory, readings: marks.readings)
+        precondition(json.contains(#""text":"Hotel 412""#) && json.contains(#""kind":"arrow""#) && !json.contains("Taxi 38"), "Copy for AI: \(json)")
+
+        // A page keeps its newest readings, and every one whose ink is on it.
+        let old = (0 ..< Reading.kept + 5).map { Reading(strokes: ["gone-\($0)"], kind: "writing", text: "x", rect: .zero, turn: 0) }
+        let trimmed = Reading.trimmed([Reading(strokes: [id(hotel)], kind: "writing", text: "live", rect: .zero, turn: 0)] + old, present: [id(hotel)])
+        precondition(trimmed.count == Reading.kept && trimmed.first?.text == "live", "trimmed to \(trimmed.count)")
+        marks.stop()
+        print("readings ok: marks kept as facts, lines read again as they grow, one call for the page, what models see, turned pages, erased ink, saving, Copy for AI, trimming")
+    }
+
     static func boxes() async throws {
         let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

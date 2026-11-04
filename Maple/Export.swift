@@ -5,7 +5,7 @@ import PencilKit
 enum Export {
     /// What an AI needs to pick up where Maple is: the page, what Maple remembers about the person, every answer and
     /// drawing with what it was made from, and the ink itself, simplified.
-    static func json(title: String, viewport: [Double], drawing: PKDrawing, notes: [Note], memory: Memory) throws -> String {
+    static func json(title: String, viewport: [Double], drawing: PKDrawing, notes: [Note], memory: Memory, readings: [Reading] = []) throws -> String {
         struct Remembered: Encodable { var text, from, because: String, date: Date }
         struct Answer: Encodable {
             var kind, read, reply: String
@@ -13,13 +13,15 @@ enum Export {
             var drawing: Drawing?, picture: String?
         }
         struct Line: Encodable { var by: String, points: [[Double]] }
+        struct Read: Encodable { var kind: String, text: String?, box: [Double], turn: Double }
         struct View: Encodable { var center: [Double], zoom, turn: Double }
         struct Page: Encodable {
-            var about = "A page from Maple, a pen-and-paper workspace on iPad where AI answers handwritten marks. Coordinates are page points, x rightward, y downward. ink is every stroke on the page, by the person or by Maple; answers are what Maple read in the person's marks and what it replied or drew; memory is what Maple remembers about the person across pages."
+            var about = "A page from Maple, a pen-and-paper workspace on iPad where AI answers handwritten marks. Coordinates are page points, x rightward, y downward. ink is every stroke on the page, by the person or by Maple; answers are what Maple read in the person's marks and what it replied or drew; memory is what Maple remembers about the person across pages; read is what Maple has read of the person's ink, each piece of writing with what it says and each mark with what it is, its box in the page turned by turn degrees."
             var title: String, exported: Date, view: View?
-            var memory: [Remembered], answers: [Answer], ink: [Line]
+            var memory: [Remembered], answers: [Answer], read: [Read], ink: [Line]
         }
         func r(_ v: CGFloat) -> Double { (Double(v) * 10).rounded() / 10 }
+        let present = Set(drawing.strokes.map(Marks.id))
         let view = viewport.count >= 3 ? View(center: [viewport[0], viewport[1]].map { ($0 * 10).rounded() / 10 }, zoom: viewport[2],
                                                turn: viewport.count > 3 ? (viewport[3] * 180 / .pi * 10).rounded() / 10 : 0) : nil
         let page = Page(title: title, exported: .now, view: view,
@@ -28,6 +30,10 @@ enum Export {
                             Answer(kind: note.mark, read: note.reading, reply: note.reply, at: [r(note.anchor.x), r(note.anchor.y)],
                                    box: note.rect.map { [r($0.minX), r($0.minY), r($0.width), r($0.height)] }, turn: note.turn.map { (Double($0) * 1800 / .pi).rounded() / 10 },
                                    drawing: note.source, picture: note.picture)
+                        },
+                        read: readings.filter { present.isSuperset(of: $0.strokes) && (!Reading.worded.contains($0.kind) || !($0.text ?? "").isEmpty) }.map {
+                            Read(kind: $0.kind, text: $0.text.flatMap { $0.isEmpty ? nil : $0 }, box: [r($0.rect.minX), r($0.rect.minY), r($0.rect.width), r($0.rect.height)],
+                                 turn: (Double($0.turn) * 1800 / .pi).rounded() / 10)
                         },
                         ink: drawing.strokes.filter { !AgentPen.edit($0) }.flatMap { stroke in
                             lines(stroke, tolerance: 0.75).map { Line(by: AgentPen.wrote(stroke) ? "maple" : "person", points: $0.map { [r($0.x), r($0.y)] }) }

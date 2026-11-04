@@ -127,7 +127,8 @@ final class QuickMenu: NSObject, UIGestureRecognizerDelegate {
         close()
         let viewport = [c.center.x, c.center.y, c.canvas.zoomScale, c.rotation].map(Double.init)
         do {
-            board.string = try Export.json(title: c.page.title, viewport: viewport, drawing: c.canvas.drawing, notes: c.marks.notes, memory: c.marks.memories.memory)
+            board.string = try Export.json(title: c.page.title, viewport: viewport, drawing: c.canvas.drawing, notes: c.marks.notes, memory: c.marks.memories.memory,
+                                           readings: c.marks.readings)
             c.marks.flash("Copied for AI")
         } catch {
             c.marks.flash("Couldn't copy: \(error.localizedDescription)")

@@ -11,6 +11,7 @@ nonisolated struct Page: Identifiable, Hashable {
     var id: URL { url }
     var ink: URL { url.appending(path: "ink.drawing") }
     var notesFile: URL { url.appending(path: "notes.json") }
+    var readingsFile: URL { url.appending(path: "readings.json") }  // what Maple has read of the ink; see Reading
     var stateFile: URL { url.appending(path: "history.plist") }  // current ink, notes and the last 100 changes, atomically
     var contentFile: URL { FileManager.default.fileExists(atPath: stateFile.path) ? stateFile : ink }
     var nameFile: URL { url.appending(path: "name.txt") }  // the person's name for it, which Maple never changes
@@ -95,6 +96,7 @@ nonisolated struct Page: Identifiable, Hashable {
         // ponytail: one picture of all the ink, so writing spread far apart gets small; crop to the densest part if names suffer.
         let png = Marks.png(level, level.bounds.insetBy(dx: -40, dy: -40))
         let readings = ((try? archive?.current.notes ?? loadNotes()) ?? []).map(\.reading)
+            + Reading.load(readingsFile).compactMap(\.text).filter { !$0.isEmpty }
         let current = try? String(contentsOf: autoNameFile, encoding: .utf8)
         guard Marks.aiEnabled, !Task.isCancelled else { return false }
         guard let name = try? await Agent(muse: muse).name(page: png, readings: readings, current: current) else { return false }

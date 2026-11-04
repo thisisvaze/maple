@@ -87,7 +87,21 @@ struct Check {
         let shown = (MuseStub.bodies[before + 1]["input"] as! [[String: Any]]).last!["output"] as! [[String: String]]
         precondition(shown.map { $0["type"]! } == ["input_text", "input_image"] && shown[1]["image_url"] == "data:image/jpeg;base64,/9j/", "\(shown)")
 
-        print("muse ok: calculate, pictures from a function, function-call rounds, last message, search, unknown function, endless calls, page name, ?? to Wonder, streaming")
+        // Reading: every piece in one call, each after its id, and back by id; what's been read goes to a mark's answer.
+        let read = try await Agent(muse: Muse(key: "read")).read([(id: "1", png: Data([1])), (id: "2", png: Data([2]))])
+        let readParts = (MuseStub.bodies.last!["input"] as! [[String: Any]])[0]["content"] as! [[String: String]]
+        precondition(read == ["1": "Hotel 412", "2": ""] && readParts.map { $0["type"]! } == ["input_text", "input_image", "input_text", "input_image"]
+                     && readParts[0]["text"] == "Piece 1:", "read: \(read) \(readParts)")
+        let echoed = try await Agent(muse: Muse(key: "echo")).read([(id: "1", png: Data([1])), (id: "2", png: Data([2]))])
+        precondition(echoed == ["1": "Taxi 38", "2": "Hotel 412"], "an id echoed as Piece 1 still matches: \(echoed)")
+        _ = try await Agent(muse: Muse(key: "answer")).ask(near: Data(), around: Data(), gesture: "question", threads: [], target: nil,
+                                                          page: [Agent.Seen(kind: "writing", text: "Hotel 412", at: [200, 190, 200, 40])])
+        let asked = ((MuseStub.bodies.last!["input"] as! [[String: Any]])[0]["content"] as! [[String: String]]).last!["text"]!
+        let page = (try JSONSerialization.jsonObject(with: Data(asked.utf8)) as? [String: Any])?["page"] as? [[String: Any]]
+        precondition(page?.count == 1 && page?[0]["kind"] as? String == "writing" && page?[0]["text"] as? String == "Hotel 412"
+                     && page?[0]["at"] as? [Double] == [200, 190, 200, 40], "page context: \(asked)")
+
+        print("muse ok: calculate, reading in one call, page context, pictures from a function, function-call rounds, last message, search, unknown function, endless calls, page name, ?? to Wonder, streaming")
     }
 }
 
@@ -113,6 +127,8 @@ nonisolated final class MuseStub: URLProtocol, @unchecked Sendable {
         case "Bearer search": output = [message("I'll search for the latest result.", commentary: true), #"{"type":"web_search_call","id":"ws_1","status":"completed"}"#, message(#"{"reply": "Kimi Antonelli"}"#)]
         case "Bearer name": output = [message("\"Water cycle.\"\nIt shows evaporation and rain.")]
         case "Bearer unknown": output = answered ? [message(#"{"reply": "done"}"#)] : [call("lookup")]
+        case "Bearer echo": output = [message(#"{"pieces": [{"id": "Piece 1", "text": "Taxi 38"}, {"id": "Piece 2", "text": "Hotel 412"}]}"#)]
+        case "Bearer read": output = [message(#"{"pieces": [{"id": "1", "text": "Hotel 412"}, {"id": "2", "text": ""}]}"#)]
         case "Bearer answer": output = [message(#"{"reading": "75% of 500 g =", "confidence": "high", "reply": ". 375 g", "passage": false, "remember": [], "forget": []}"#)]
         default: output = [call("calculate")]
         }

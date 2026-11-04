@@ -25,6 +25,8 @@ Room picks the spot so an answer never lands on your writing: the rest of the li
 
 Answers are grounded: Muse hands every number that needs working out to the app's own calculator (a small math grammar, never run as code), and searches the web for anything current, like recent events or prices.
 
+Maple keeps what it reads. Each time the pen rests, Jev names the newest ink (writing, an arrow, a circle, a box), and Maple keeps that with its strokes and where it sits. Once the pen has rested a little longer, Muse reads any new writing, every piece in one call for the page. Answers, drawings and edits then get what's been read nearby as text along with the pictures, so handwriting isn't read again each time; where the two disagree, the pictures win. Readings are facts, never meanings: what the writing is for, and how it connects, is left to the model. They're saved in `readings.json` beside the page, and Copy for AI includes them.
+
 Quiet dots: only text the pen can't write exactly, and answers with no room, stay a dot that opens into a compact paper bubble. Everything else, a `??`'s longer answer and an exact text included, is ink.
 
 ### Boxes
