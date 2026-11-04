@@ -227,7 +227,9 @@ nonisolated final class VoiceStub: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         let rejected = request.value(forHTTPHeaderField: "Authorization") == "Bearer reject"
         let json: String
-        if request.url!.path == "/v1/asr/transcribe" {
+        if request.url!.path.contains("/images/") {  // Muse Image's line art for a spoken box: a dot, so it keeps Spark's strokes
+            json = #"{"data":[{"b64_json":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="}]}"#
+        } else if request.url!.path == "/v1/asr/transcribe" {
             json = #"{"transcript":"  What is two plus two?\n","turns":[]}"#
         } else {
             let body: Data

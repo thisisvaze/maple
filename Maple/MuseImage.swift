@@ -14,9 +14,30 @@ nonisolated struct MuseImage: Sendable {
 
     /// A picture of `prompt` at about `ratio`, as WebP. With `search`, it may look up what something really looks like.
     func paint(_ prompt: String, ratio: CGSize, search: Bool = false) async throws -> Data {
-        let scale = Self.longSide / max(ratio.width, ratio.height)
-        let width = max(ratio.width * scale, Self.longSide / 16), height = max(ratio.height * scale, Self.longSide / 16)
-        return try await post("generations", ["prompt": prompt, "size": "\(Int(width))x\(Int(height))", "tool_enablement": Self.tools(search)])
+        try await post("generations", ["prompt": prompt, "size": Self.size(ratio), "tool_enablement": Self.tools(search)])
+    }
+
+    /// What Maple traces into an ink drawing (see Trace): black lines and flat colour in its four fill pencils, on white,
+    /// with no text, which image models garble; Muse writes the labels.
+    static let lineArt = "Simple, clean line drawing, like a careful notebook sketch: confident black outlines of even width, and flat colour fills only in pale yellow (#F7DC6E), soft green (#7FC48E), light blue (#86B4EC) or pink (#F09BBD) where colour helps; everything else white. White background. No shading, gradients, texture or shadows, and no text, letters or numbers."
+
+    /// Line art of what a box's label asks for, read from the close-up itself (the box in red, its label in dark ink),
+    /// at about `ratio`, so a box the person drew is painted without waiting for Muse Spark to read it (9 s, 4 Nov).
+    func lineArt(from closeUp: Data, ratio: CGSize) async throws -> Data {
+        try await post("edits", ["prompt": "This is a close-up of a notebook page: an empty box drawn in red, and the handwritten label or writing it belongs to in dark ink. On a plain white page with nothing else, draw what the label asks for, filling the box's shape. " + Self.lineArt + " Leave out the box and the label.",
+                                 "size": Self.size(ratio), "tool_enablement": Self.tools(false),
+                                 "images": [["image_url": "data:image/png;base64," + closeUp.base64EncodedString()]]])
+    }
+
+    /// Line art of `subject`, for a box Maple framed for a spoken request, at about `ratio`.
+    func lineArt(_ subject: String, ratio: CGSize) async throws -> Data {
+        try await post("generations", ["prompt": subject + ". " + Self.lineArt, "size": Self.size(ratio), "tool_enablement": Self.tools(false)])
+    }
+
+    /// `ratio` as the size Muse Image is asked for: it sets the shape, not the pixels that come back.
+    static func size(_ ratio: CGSize) -> String {
+        let scale = longSide / max(ratio.width, ratio.height, 1)
+        return "\(Int(max(ratio.width * scale, longSide / 16)))x\(Int(max(ratio.height * scale, longSide / 16)))"
     }
 
     /// `images`, PNGs, changed as `instruction` says. There are no masks: a copy with the part marked shows where.

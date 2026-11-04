@@ -19,7 +19,8 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var strokes: [[[Double]]]
         var labels: [Label]
         var fill: String? = nil  // one of `fills` colours its closed shapes in; anything else, or none, leaves them open
-        var role: String? = nil  // in a hand: "detail" draws lighter, "arrow" flicks its short strokes; nil or else is a main line
+        var role: String? = nil  // in a hand: "detail" draws lighter, "arrow" flicks its short strokes; "fill" only colours its
+        // closed shapes in, with no line round them (a traced painting's colour, whose lines are their own part); nil or else is a main line
     }
 
     /// One line Maple's pencil draws, and how: `lines` in the order they're drawn and stacked.
@@ -97,7 +98,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
                 if shut { closed.append(points) }
                 drawn.append((points, inHand ? Self.lift(points, closed: shut, zoom: zoom) : [points]))
             }
-            pen += Self.inks(drawn, role: inHand ? part.role : nil, zoom: zoom)
+            if part.role != "fill" { pen += Self.inks(drawn, role: inHand ? part.role : nil, zoom: zoom) }
             guard let fill = part.fill, Self.fills.contains(fill) else { continue }
             // ponytail: each closed shape is coloured in on its own, so a shape inside another is coloured over twice;
             // colour by even-odd across the part's shapes if drawings need holes.

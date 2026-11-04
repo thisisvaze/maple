@@ -481,6 +481,11 @@ final class Marks {
 
     @concurrent nonisolated static func pictures(_ pieces: [(PKDrawing, CGRect)]) async -> [Data] { pieces.map { png($0.0, $0.1) } }
 
+    /// A painting traced into a drawing's parts, off the main thread.
+    @concurrent nonisolated static func traced(_ painting: Data, _ size: CGSize, palette: [String: SIMD3<Double>]) async -> [Drawing.Part]? {
+        Trace.parts(painting, in: size, palette: palette.merging(["paper": [1, 1, 1]]) { a, _ in a })
+    }
+
     /// Saves the readings beside the notes, keeping at most `Reading.kept`.
     func saveReadings() {
         readings = Reading.trimmed(readings, present: Set(canvas.drawing.strokes.map(Self.id)))
@@ -985,6 +990,16 @@ final class Marks {
         defer { asking -= 1 }
         let start = ContinuousClock.now
         let anchor = Self.anchor(box, zoom).applying(CGAffineTransform(rotationAngle: -turn))
+        // Muse Image starts on line art for the box at once, from the close-up or the spoken request, while Spark reads
+        // the box: when Spark draws it in ink, the painting's traced lines and fills take the place of Spark's freehand
+        // strokes. A reply to Maple's question has no label in its close-up, so it keeps Spark's own ink.
+        let lineArt: Task<Data?, Never>? = asked == nil ? painter.map { painter in
+            Task { [near] in
+                if let request { return try? await painter.lineArt(request, ratio: box.size) }
+                return try? await painter.lineArt(from: near, ratio: box.size)
+            }
+        } : nil
+        defer { lineArt?.cancel() }
         do {
             var drawing = try await agent.draw(near: near, around: around, size: box.size, threads: threads, asked: asked?.reply, request: request, memory: memory, page: page)
             guard active else { return }
@@ -998,6 +1013,17 @@ final class Marks {
                 done()
                 return askFirst(drawing, trigger: trigger, anchor: anchor, box: box, turn: turn, zoom: zoom)
             }
+            if drawing.kind == "ink", let art = await lineArt?.value {
+                guard active else { return }
+                guard present(trigger) else { return done() }
+                let start = ContinuousClock.now
+                if let traced = await Self.traced(art, box.size, palette: AgentPen.fills.mapValues(AgentPen.rgb)) {
+                    // Spark's labels stay, in their own parts; its freehand strokes give way to the painting's.
+                    drawing.parts = traced + drawing.parts.compactMap { $0.labels.isEmpty ? nil : Drawing.Part(name: $0.name, strokes: [], labels: $0.labels) }
+                    logger.notice("traced strokes=\(traced[0].strokes.count) fills=\(traced.count - 1) ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
+                }
+            }
+            lineArt?.cancel()  // drawn some other way: the painting isn't needed
             let picture = try await paint(drawing, size: box.size)
             guard active else { return }
             guard present(trigger) else { return done() }
