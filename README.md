@@ -55,7 +55,7 @@ The **Maple on / Maple off** button beside Record pauses everything Maple does: 
 
 ## Maple remembers
 
-Every model call reads what Maple remembers about you, on every page. An answer only proposes a memory: plain code checks that each claim quotes your own words, that it isn't new wording of something you struck, and that nothing you wrote gets changed, then commits and logs it. "Noted: Is a nurse" shows for a moment. The Me page, pinned first in the gallery, shows it all in ink: strike a line and it's forgotten at once, undo brings it back, and whatever you write there stands in your own words. It stays on the iPad in `memory.json`, and goes to Meta with each model call.
+Every model call reads what Maple remembers about you, on every page. An answer only proposes a memory: plain code checks that each claim quotes your own words, that it isn't new wording of something you struck, and that nothing you wrote gets changed, then commits and logs it. "Noted: Is a nurse" shows for a moment. The Me page, opened from its own button at the top of the gallery, shows it all in ink: strike a line and it's forgotten at once, undo brings it back, and whatever you write there stands in your own words. It stays on the iPad in `memory.json`, and goes to Meta with each model call.
 
 ## Pages
 

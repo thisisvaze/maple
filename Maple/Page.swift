@@ -24,7 +24,7 @@ nonisolated struct Page: Identifiable, Hashable {
     /// Maple names a page again once its ink has changed, until the person names it.
     var needsName: Bool { !FileManager.default.fileExists(atPath: nameFile.path) && modified(autoNameFile) < modified(contentFile) }
 
-    /// The page of what Maple remembers, pinned first in the gallery. It's a page like any other, but it can't be deleted.
+    /// The page of what Maple remembers, opened from the gallery's toolbar. It's a page like any other, but it can't be deleted.
     static var me: Page { Page(url: folder.appending(path: "me"), edited: .distantPast) }
     var isMe: Bool { url.lastPathComponent == "me" }
     /// The person has written on the Me page since Maple last read it.

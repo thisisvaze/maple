@@ -14,12 +14,14 @@ struct Gallery: View {
     @AppStorage("voiceInput") var voiceInput = false
     @AppStorage("aiEnabled") var aiEnabled = true
     @Namespace var zoom
+    /// The Me page opens from the toolbar, so it isn't a card. `pages` keeps it so its changes still rerun the reading below.
+    var cards: [Page] { pages.filter { !$0.isMe } }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 32)], spacing: 40) {
-                    ForEach(pages) { page in
+                    ForEach(cards) { page in
                         VStack(spacing: 10) {
                             Button { tap(page) } label: {
                                 Card(page: page, selected: selection.map { $0.contains(page.id) }, zoom: zoom)
@@ -47,7 +49,7 @@ struct Gallery: View {
             }
             .background(Color(.systemGroupedBackground))
             .overlay {
-                if pages.isEmpty {
+                if cards.isEmpty {
                     ContentUnavailableView("No pages yet", systemImage: "square.and.pencil", description: Text("Tap + to start one."))
                 }
             }
@@ -65,9 +67,14 @@ struct Gallery: View {
                             .disabled(selection.isEmpty)
                     }
                 } else {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Me", systemImage: "person.crop.circle") { open = pages.first(where: \.isMe) ?? .me }
+                            .accessibilityHint("Opens what Maple remembers about you.")
+                    }
+                    .matchedTransitionSource(id: Page.me.id, in: zoom)
                     ToolbarItemGroup(placement: .topBarTrailing) {
                         Button("Select") { selection = [] }
-                            .disabled(pages.isEmpty)
+                            .disabled(cards.isEmpty)
                         Button("New page", systemImage: "plus") {
                             let page = Page.create()
                             pages = Page.all()  // its card is there to open out of, and close back into
@@ -163,19 +170,16 @@ struct Gallery: View {
 
     func tap(_ page: Page) {
         guard var selected = selection else { open = page; return }
-        guard !page.isMe else { return }
         if !selected.insert(page.id).inserted { selected.remove(page.id) }
         selection = selected
     }
 
     func rename(_ page: Page) {
-        guard !page.isMe else { return }
         newName = page.title
         renaming = page
     }
 
     func select(_ page: Page) {
-        guard !page.isMe else { return }
         selection = (selection ?? []).union([page.id])
     }
 
