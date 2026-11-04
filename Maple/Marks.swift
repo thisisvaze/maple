@@ -1168,7 +1168,7 @@ final class Marks {
             case (true, .flick): (thickness, press) = (AgentPen.hand * weight, .flick)
             case (true, .main): (thickness, press) = (AgentPen.hand * weight, .hand)
             }
-            return AgentPen.write(line.map { $0.applying(page) }, zoom: zoom, thickness: thickness, wobble: ink.cap == nil && ink.fill == nil,
+            return AgentPen.write(line.map { $0.applying(page) }, zoom: zoom, thickness: thickness, wobble: ink.cap == nil && ink.fill == nil && !ink.steady,
                                   colour: ink.fill.flatMap { AgentPen.fills[$0] } ?? AgentPen.blue, press: press, date: date)
         }
         return (strokes, lines)

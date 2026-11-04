@@ -9,9 +9,11 @@ import simd
 nonisolated enum Trace {
     // Calibration knobs, tuned on six paintings of different kinds (4 Nov): a map, an apple, a bicycle, a cat, a
     // wireframe and a diagram.
-    static let side = 512  // pixels a painting is traced at, along its longer side
+    static let side = 768  // pixels a painting is traced at, along its longer side
     static let ink = 0.42  // luminance under which a pixel is line
     static let shortest = 6  // pixels a line needs to be kept
+    static let spur = 10  // pixels under which a branch off a junction with a loose end is a thinning stub, not a line
+    static let reach = 4, tolerance: CGFloat = 1.6, rounds = 2  // pixels averaged either side, simplified within, rounds of rounding
     static let smallestFill = 1.0 / 600  // of the picture, for a coloured region to be kept
     static let mostStrokes = 200, mostFills = 40, mostPoints = 9_000  // inside Drawing's own caps of 256 and 12000
     static let margin: CGFloat = 0.06  // of the box, on each side, as the drawing instructions keep
@@ -32,9 +34,9 @@ nonisolated enum Trace {
         let scale = min(size.width * (1 - 2 * margin) / CGFloat(w), size.height * (1 - 2 * margin) / CGFloat(h))
         let dx = (size.width - CGFloat(w) * scale) / 2, dy = (size.height - CGFloat(h) * scale) / 2
         func place(_ points: [CGPoint]) -> [[Double]] { points.map { [Double(dx + $0.x * scale), Double(dy + $0.y * scale)].map { ($0 * 10).rounded() / 10 } } }
-        var tolerance: CGFloat = 0.9, strokes: [[CGPoint]] = []
+        var tolerance = Self.tolerance, strokes: [[CGPoint]] = []
         repeat {  // simplify harder until the points fit
-            strokes = raw.map { smooth(simplify(averaged($0), tolerance)) }
+            strokes = raw.map { line in (0..<rounds).reduce(simplify(averaged(line, reach: reach), tolerance)) { p, _ in smooth(p) } }
             tolerance *= 1.6
         } while strokes.reduce(0, { $0 + $1.count }) + regions.reduce(0, { $0 + $1.outline.count }) > mostPoints && tolerance < 8
         return [Drawing.Part(name: "drawing", strokes: strokes.map(place), labels: [], role: "traced")]
@@ -44,7 +46,7 @@ nonisolated enum Trace {
     /// The painting as colours, `side` pixels along its longer side.
     struct Picture {
         var w = 0, h = 0, rgb: [SIMD3<Double>] = []
-        init?(_ data: Data) {
+        init?(_ data: Data, side: Int = Trace.side) {
             guard let source = CGImageSourceCreateWithData(data as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
                   image.width > 2, image.height > 2 else { return nil }
             let scale = Double(side) / Double(max(image.width, image.height))
@@ -96,7 +98,9 @@ nonisolated enum Trace {
         return m
     }
 
-    /// The skeleton as lines of pixels, broken at ends and where lines meet; a loop with neither is traced whole.
+    /// The skeleton as lines of pixels, broken at ends and where lines meet; a loop with neither is traced whole. A short
+    /// branch from a junction to a loose end is the stub thinning leaves where lines meet at an angle, and it goes: the
+    /// pencil would draw it as a dot.
     static func lines(_ m: [Bool], _ w: Int, _ h: Int) -> [[CGPoint]] {
         let steps = [(0, -1), (1, 0), (0, 1), (-1, 0), (1, -1), (1, 1), (-1, 1), (-1, -1)]  // straight on before diagonal
         func neighbours(_ i: Int) -> [Int] {
@@ -125,6 +129,8 @@ nonisolated enum Trace {
                 let path = walk(from: i, to: n)
                 walked.insert([i, n])
                 walked.insert([path[path.count - 1], path[path.count - 2]])
+                let ends = [neighbours(path[0]).count, neighbours(path[path.count - 1]).count]
+                if path.count < spur, ends.contains(1), ends.contains(where: { $0 >= 3 }) { continue }
                 out.append(path.map { CGPoint(x: $0 % w, y: $0 / w) })
             }
         }

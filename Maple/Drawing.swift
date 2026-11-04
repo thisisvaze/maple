@@ -21,8 +21,8 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var fill: String? = nil  // one of `fills` colours its closed shapes in; anything else, or none, leaves them open
         var role: String? = nil  // in a hand: "detail" draws lighter, "arrow" flicks its short strokes; "fill" only colours its
         // closed shapes in, with no line round them (a traced painting's colour, whose lines are their own part); "traced" is
-        // a traced painting's lines, which keep a hand's bow but don't lift at corners, since a painting's every small kink
-        // would break them into scribbles; nil or else is a main line
+        // a traced painting's lines, drawn steady: no lift at corners, where a painting's every small kink would break them
+        // into scribbles, and no bow or drift; nil or else is a main line
     }
 
     /// One line Maple's pencil draws, and how: `lines` in the order they're drawn and stacked.
@@ -33,6 +33,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var cap: CGFloat? = nil  // a letter's capital height, so the pen can write small labels finer
         var fill: String? = nil  // the colour colouring in is done in
         var kind = Kind.main
+        var steady = false  // a traced painting's line: drawn without the bow and drift a hand gives Muse's own lines
     }
 
     /// The coloured pencils a part can be coloured in with (AgentPen.fills has their colours).
@@ -101,7 +102,9 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
                 if shut { closed.append(points) }
                 drawn.append((points, inHand && part.role != "traced" ? Self.lift(points, closed: shut, zoom: zoom) : [points]))
             }
-            if part.role != "fill" { pen += Self.inks(drawn, role: inHand ? part.role : nil, zoom: zoom) }
+            if part.role != "fill" {
+                pen += Self.inks(drawn, role: inHand ? part.role : nil, zoom: zoom).map { var ink = $0; ink.steady = part.role == "traced"; return ink }
+            }
             guard let fill = part.fill, Self.fills.contains(fill) else { continue }
             // ponytail: each closed shape is coloured in on its own, so a shape inside another is coloured over twice;
             // colour by even-odd across the part's shapes if drawings need holes.
