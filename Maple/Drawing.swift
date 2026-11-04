@@ -20,7 +20,9 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var labels: [Label]
         var fill: String? = nil  // one of `fills` colours its closed shapes in; anything else, or none, leaves them open
         var role: String? = nil  // in a hand: "detail" draws lighter, "arrow" flicks its short strokes; "fill" only colours its
-        // closed shapes in, with no line round them (a traced painting's colour, whose lines are their own part); nil or else is a main line
+        // closed shapes in, with no line round them (a traced painting's colour, whose lines are their own part); "traced" is
+        // a traced painting's lines, which keep a hand's bow but don't lift at corners, since a painting's every small kink
+        // would break them into scribbles; nil or else is a main line
     }
 
     /// One line Maple's pencil draws, and how: `lines` in the order they're drawn and stacked.
@@ -97,7 +99,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
                 guard points.count > 1 else { continue }
                 let shut = Self.closes(points, smallest: inHand ? 6 / zoom : 6)  // a hand measures a shape on screen
                 if shut { closed.append(points) }
-                drawn.append((points, inHand ? Self.lift(points, closed: shut, zoom: zoom) : [points]))
+                drawn.append((points, inHand && part.role != "traced" ? Self.lift(points, closed: shut, zoom: zoom) : [points]))
             }
             if part.role != "fill" { pen += Self.inks(drawn, role: inHand ? part.role : nil, zoom: zoom) }
             guard let fill = part.fill, Self.fills.contains(fill) else { continue }

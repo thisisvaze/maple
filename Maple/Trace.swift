@@ -16,8 +16,9 @@ nonisolated enum Trace {
     static let mostStrokes = 200, mostFills = 40, mostPoints = 9_000  // inside Drawing's own caps of 256 and 12000
     static let margin: CGFloat = 0.06  // of the box, on each side, as the drawing instructions keep
 
-    /// The parts of a drawing for a box of `size`, in box points: one for the lines, then one for each coloured region,
-    /// biggest first, coloured in without an outline of its own. `palette` is the fills by name, with "paper" for none.
+    /// The parts of a drawing for a box of `size`, in box points: one for the lines, smoothed along the pixels they were
+    /// traced from and drawn without a hand's lifts at corners, then one for each coloured region, biggest first,
+    /// coloured in without an outline of its own. `palette` is the fills by name, with "paper" for none.
     /// Nil when there's no line art to trace, as when the painting failed or came back blank.
     static func parts(_ painting: Data, in size: CGSize, palette: [String: SIMD3<Double>]) -> [Drawing.Part]? {
         guard let picture = Picture(painting), size.width > 0, size.height > 0 else { return nil }
@@ -33,10 +34,10 @@ nonisolated enum Trace {
         func place(_ points: [CGPoint]) -> [[Double]] { points.map { [Double(dx + $0.x * scale), Double(dy + $0.y * scale)].map { ($0 * 10).rounded() / 10 } } }
         var tolerance: CGFloat = 0.9, strokes: [[CGPoint]] = []
         repeat {  // simplify harder until the points fit
-            strokes = raw.map { smooth(simplify($0, tolerance)) }
+            strokes = raw.map { smooth(simplify(averaged($0), tolerance)) }
             tolerance *= 1.6
         } while strokes.reduce(0, { $0 + $1.count }) + regions.reduce(0, { $0 + $1.outline.count }) > mostPoints && tolerance < 8
-        return [Drawing.Part(name: "drawing", strokes: strokes.map(place), labels: [])]
+        return [Drawing.Part(name: "drawing", strokes: strokes.map(place), labels: [], role: "traced")]
             + regions.map { Drawing.Part(name: "\(colours[$0.colour]) area", strokes: [place($0.outline)], labels: [], fill: colours[$0.colour], role: "fill") }
     }
 
@@ -196,6 +197,17 @@ nonisolated enum Trace {
         }
         guard distance > tolerance else { return [a, b] }
         return Array(open(Array(p[...farthest]), tolerance).dropLast()) + open(Array(p[farthest...]), tolerance)
+    }
+
+    /// Each point the average of those up to `reach` either side of it, ends kept: a line of pixels steps in stairs, and
+    /// this takes the steps out before the line is simplified.
+    static func averaged(_ p: [CGPoint], reach: Int = 2) -> [CGPoint] {
+        guard p.count > 2 * reach + 1 else { return p }
+        return p.indices.map { i in
+            guard i >= reach, i < p.count - reach else { return p[i] }
+            let near = p[(i - reach)...(i + reach)]
+            return CGPoint(x: near.map(\.x).reduce(0, +) / CGFloat(near.count), y: near.map(\.y).reduce(0, +) / CGFloat(near.count))
+        }
     }
 
     /// One round of Chaikin's corner cutting, ends kept, so a traced line curves like a drawn one.

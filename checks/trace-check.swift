@@ -40,7 +40,7 @@ struct Check {
         let size = CGSize(width: 400, height: 300)
         guard let parts = Trace.parts(art, in: size, palette: palette) else { preconditionFailure("traced nothing") }
         let lines = parts[0], fills = parts.dropFirst()
-        precondition(lines.name == "drawing" && lines.fill == nil && lines.role == nil, "the lines come first, drawn as lines")
+        precondition(lines.name == "drawing" && lines.fill == nil && lines.role == "traced", "the lines come first, drawn as traced lines")
         precondition((3...6).contains(lines.strokes.count), "one stroke a line, down its middle: \(lines.strokes.count) strokes")
         // The ring and the rounded rectangle are loops, closed and round, not folded to a dot.
         let loops = lines.strokes.filter { s in s.count > 8 && hypot(s[0][0] - s.last![0], s[0][1] - s.last![1]) < 2 }
