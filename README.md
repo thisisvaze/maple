@@ -14,7 +14,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 
 - **`?`** is answered in Maple's fine blue pen right beside it, in Handlee's hand with real math (powers, ±, √, Greek).
 - **A double dot**, which the iPad reads from its timing, is answered the same way.
-- **`??`** thinks harder: the question goes to Muse Wonder at medium effort instead of Spark at minimal. Its longer answer, explaining why, waits behind a quiet dot (15 to 18 s for "why is e^iπ = −1 ??").
+- **`??`** thinks harder: the question goes to Muse Wonder at medium effort instead of Spark at minimal. Its longer answer, explaining why, is written in ink like any answer, and stays a quiet dot only when there's no room (15 to 18 s for "why is e^iπ = −1 ??").
 - **`=` with nothing after it** gets only the value, on the rest of the line: "75% of 500 g =" gets 375 g, and "R =" gets 8.314 J/(mol·K).
 - **`…` trailing off a sequence or a list** carries it on in the same pattern: "1, 1, 2, 3, 5, …" gets 8, 13, 21. Both of these take the size and baseline of the line's letters, not of the small sign. A `…` on its own line under a list carries the list on down the page: about three more items, one per line, each with a bullet like yours or the next number.
 - **An empty bullet** under a list, a dash, a dot, a number like "3." or a tick box, gets the next item written after it, at the list's size: under "– passport, – charger", a new "–" gets "sunscreen". Draw another and it gets the next. If you start writing after the bullet yourself, Maple leaves it to you.
@@ -25,7 +25,7 @@ Room picks the spot so an answer never lands on your writing: the rest of the li
 
 Answers are grounded: Muse hands every number that needs working out to the app's own calculator (a small math grammar, never run as code), and searches the web for anything current, like recent events or prices.
 
-Quiet dots: exact texts asked for by name (a quote, a poem, a named problem), text the pen can't write exactly, and answers with no room stay a dot that opens into a compact paper bubble.
+Quiet dots: only text the pen can't write exactly, and answers with no room, stay a dot that opens into a compact paper bubble. Everything else, a `??`'s longer answer and an exact text included, is ink.
 
 ### Boxes
 

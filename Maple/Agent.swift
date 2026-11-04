@@ -11,7 +11,7 @@ nonisolated struct Agent: Sendable {
         var reading: String
         var confidence: String
         var reply: String
-        var passage: Bool  // the reply is exact text they asked to read, so it stays a quiet dot to open, never inked
+        var passage: Bool  // the reply is exact text they asked to read, word for word
         var searched = false, calculated = 0  // how Muse got there: a web search, and calls to calculate
         var remember: [Memory.Proposal]?, forget: [Memory.Forget]?  // proposals; Memory checks them against what they said
         var boxes: [Box] = []  // for voice: boxes Muse asked Maple to draw and fill

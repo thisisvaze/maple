@@ -446,8 +446,8 @@ final class Marks {
         bubbles.removeAll { $0 === bubble }
     }
 
-    /// Answers a ?, a double dot, an = or … ending a line, or an empty bullet in ink beside it, once the pen rests. A ??'s
-    /// longer answer, exact texts, and answers the pen can't write or that find no room, stay a quiet dot to tap open, or
+    /// Answers a ?, a ??, a double dot, an = or … ending a line, or an empty bullet in ink beside it, once the pen rests
+    /// (no bubbles, 3 Nov). Only an answer the pen can't write, or that finds no room, stays a quiet dot to tap open, or
     /// for a double dot, opened at once; a bullet with no room after it is being filled in by hand, and is left alone.
     /// The dot is the thinking orb meanwhile.
     func ask(_ agent: Agent, _ near: Data, _ around: Data, gesture: String, threads: [Agent.Thread], target: String?, trigger: [String],
@@ -463,7 +463,7 @@ final class Marks {
             learn(answer, evidence: answer.reading)
             guard present(trigger), !answer.reply.isEmpty else { return remove(bubble) }
             let note = Note(mark: gesture, trigger: trigger, anchor: anchor, zoom: zoom, reading: answer.reading, reply: answer.reply, turn: turn)
-            guard gesture != "double_question", !answer.passage, let text = Handwriting.answers.writable(answer.reply) else { return show(note, bubble: bubble) }
+            guard let text = Handwriting.answers.writable(answer.reply) else { return show(note, bubble: bubble) }
             enqueue { [weak self] in self?.write(text, note: note, view: view, bubble: bubble) }
         } catch {
             logger.error("ask failed: \(error.localizedDescription, privacy: .public)")
