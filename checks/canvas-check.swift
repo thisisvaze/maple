@@ -1488,6 +1488,12 @@ struct Check {
         precondition(traced.parts.contains { $0.fill == "yellow" && $0.role == "fill" }, "its colour as a fill with no line of its own")
         precondition(traced.parts.contains { $0.name == "apple" && $0.strokes.isEmpty && $0.labels.map(\.text) == ["apple"] }, "Muse's label stays, its strokes go")
         precondition(!marks.strokes(of: marks.notes.last!).isEmpty, "inked on the page")
+        let flat = marks.notes.last!.picture
+        precondition(flat?.hasSuffix(".png") == true && FileManager.default.fileExists(atPath: page.pictures.appending(path: flat!).path),
+                     "its colour laid in flat as the picture under the ink")
+        let fillColours = AgentPen.fills.values.map(AgentPen.rgb)
+        precondition(!marks.strokes(of: marks.notes.last!).contains { AgentPen.inked($0, in: fillColours) }, "and no pencil colouring in over it")
+        precondition(marks.strokes(of: marks.notes.last!).contains { $0.ink.inkType == .pen }, "its lines in pen")
         let own = await drawn(lineArt: "")
         precondition(own.parts.map(\.name) == ["apple"] && own.parts[0].strokes.count == 1, "no line art asked for: Muse's own drawing")
         // A painting with no lines in it leaves the orange dot to try again, and no drawing.

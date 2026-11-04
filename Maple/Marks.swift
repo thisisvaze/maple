@@ -1081,15 +1081,42 @@ final class Marks {
         guard drawing.painted else { return nil }
         let data: Data
         if drawing.kind == "computed" { data = try await Self.rendered(drawing, size) }
+        else if drawing.kind == "ink" { data = await Self.flat(drawing, size, colours: AgentPen.fills) }
         else {
             guard let painter else { throw Muse.Failure("No Meta API key. Add one in Secrets.xcconfig.") }
             data = try await painter.paint(drawing.picture.prompt, ratio: size, search: drawing.picture.search)
         }
         guard active else { throw CancellationError() }
-        return try page.keep(data, as: drawing.kind == "computed" ? "png" : "webp")
+        return try page.keep(data, as: drawing.kind == "picture" ? "webp" : "png")
     }
 
     @concurrent nonisolated static func rendered(_ drawing: Drawing, _ size: CGSize) async throws -> Data { try drawing.computed.raster(in: size) }
+
+    // Calibration knobs: how far a traced painting's flat colour spreads past its edge, so it tucks under its pen line
+    // with no paper showing between, in box points; how much of it shows; and the pixels a box point gets.
+    nonisolated static let tuck: CGFloat = 1.3, flatTone: CGFloat = 0.85, flatScale: CGFloat = 3
+
+    /// A traced painting's colour, its "fill" parts laid in flat on clear, for a box of `size`: the picture under its
+    /// pen lines, as solid as the painting's own.
+    @concurrent nonisolated static func flat(_ drawing: Drawing, _ size: CGSize, colours: [String: UIColor]) async -> Data {
+        let format = UIGraphicsImageRendererFormat()
+        (format.scale, format.opaque) = (flatScale, false)
+        return UIGraphicsImageRenderer(size: size, format: format).pngData { context in
+            let c = context.cgContext
+            c.setLineJoin(.round)
+            c.setLineWidth(2 * tuck)
+            for part in drawing.parts where part.role == "fill" {
+                guard let colour = part.fill.flatMap({ colours[$0] }), let outline = part.strokes.first, outline.count > 2 else { continue }
+                let path = CGMutablePath()
+                path.addLines(between: outline.map { CGPoint(x: $0[0], y: $0[1]) })
+                path.closeSubpath()
+                c.setFillColor(colour.withAlphaComponent(flatTone).cgColor)
+                c.setStrokeColor(colour.withAlphaComponent(flatTone).cgColor)
+                c.addPath(path)
+                c.drawPath(using: .fillStroke)
+            }
+        }
+    }
 
     /// The pictures an edit brings, by note: Muse Image repaints a picture from a copy with the marks on it, and a
     /// computed picture whose equations changed is worked out again.
@@ -1155,7 +1182,9 @@ final class Marks {
         guard length * zoom / 2 < 100_000 else { throw Plot.Failure("The drawing is too complex") }
         let page = CGAffineTransform(rotationAngle: -turn)
         let lines = pen.map { $0.line.map { CGPoint(x: box.minX + $0.x, y: box.minY + $0.y) } }
-        // calibration knob: a hand's weights are for a box about 280 screen points across, and go down to 72% in a small one.
+        // calibration knob: a hand's weights are for a box about 280 screen points across, and go down to 72% in a small one;
+        // a traced painting's pen lines are a third heavier, to hold their flat colour.
+        let tracedLine: CGFloat = 1.33
         let inHand = drawing.style >= Drawing.handDrawn, weight = min(1, max(0.72, min(box.width, box.height) * zoom / 280))
         let strokes = zip(lines, pen).map { line, ink in
             let thickness: CGFloat, press: AgentPen.Press?
@@ -1168,7 +1197,7 @@ final class Marks {
             case (true, .flick): (thickness, press) = (AgentPen.hand * weight, .flick)
             case (true, .main): (thickness, press) = (AgentPen.hand * weight, .hand)
             }
-            return AgentPen.write(line.map { $0.applying(page) }, zoom: zoom, thickness: thickness, wobble: ink.cap == nil && ink.fill == nil && !ink.steady,
+            return AgentPen.write(line.map { $0.applying(page) }, zoom: zoom, thickness: thickness * (ink.steady ? tracedLine : 1), wobble: ink.cap == nil && ink.fill == nil && !ink.steady,
                                   colour: ink.fill.flatMap { AgentPen.fills[$0] } ?? AgentPen.blue, press: press, nib: ink.steady ? .pen : .pencil, date: date)
         }
         return (strokes, lines)

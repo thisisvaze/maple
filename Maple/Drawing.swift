@@ -19,8 +19,8 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var strokes: [[[Double]]]
         var labels: [Label]
         var fill: String? = nil  // one of `fills` colours its closed shapes in; anything else, or none, leaves them open
-        var role: String? = nil  // in a hand: "detail" draws lighter, "arrow" flicks its short strokes; "fill" only colours its
-        // closed shapes in, with no line round them (a traced painting's colour, whose lines are their own part); "traced" is
+        var role: String? = nil  // in a hand: "detail" draws lighter, "arrow" flicks its short strokes; "fill" is a traced
+        // painting's colour, laid in flat under the ink as the drawing's picture (Marks.flat), with no line of its own; "traced" is
         // a traced painting's lines, drawn steady in pen: no lift at corners, where a painting's every small kink would break
         // them into scribbles, no bow or drift, and none of the pencil's grain; nil or else is a main line
     }
@@ -63,8 +63,9 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
     /// Lines that press and lift, lift at corners, overlap where a curve closes, colour in softly and weigh by role.
     static let handDrawn = 1
 
-    /// A picture fills its box, under whatever ink the drawing has.
-    var painted: Bool { kind == "picture" || kind == "computed" && !computed.field.isEmpty }
+    /// A picture fills its box, under whatever ink the drawing has: a painting, a computed field, or a traced painting's
+    /// flat colour.
+    var painted: Bool { kind == "picture" || kind == "computed" && !computed.field.isEmpty || parts.contains { $0.role == "fill" } }
 
     /// Pen lines for a box of `size`: what the app computes itself (a plot's graph, a figure, a computed picture's lines)
     /// and the model's strokes in its parts (over those, notes on them), plus labels in Hershey's pen font. Model output
@@ -91,7 +92,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var budget = 12_000, strokes = 256  // the model's points and strokes, across all the parts
         // In a hand, a plot's axes, its first two lines, are lighter than its curve.
         var pen = lines.enumerated().map { Ink(line: $1, kind: inHand && kind == "plot" && $0 < 2 ? .detail : .main) }, colouring: [Ink] = []
-        for part in parts {
+        for part in parts where part.role != "fill" {  // a traced painting's colour is its picture, not ink
             var closed: [[CGPoint]] = [], drawn: [(model: [CGPoint], lines: [[CGPoint]])] = []
             for stroke in part.strokes.prefix(max(strokes, 0)) {
                 strokes -= 1
@@ -102,9 +103,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
                 if shut { closed.append(points) }
                 drawn.append((points, inHand && part.role != "traced" ? Self.lift(points, closed: shut, zoom: zoom) : [points]))
             }
-            if part.role != "fill" {
-                pen += Self.inks(drawn, role: inHand ? part.role : nil, zoom: zoom).map { var ink = $0; ink.steady = part.role == "traced"; return ink }
-            }
+            pen += Self.inks(drawn, role: inHand ? part.role : nil, zoom: zoom).map { var ink = $0; ink.steady = part.role == "traced"; return ink }
             guard let fill = part.fill, Self.fills.contains(fill) else { continue }
             // ponytail: each closed shape is coloured in on its own, so a shape inside another is coloured over twice;
             // colour by even-odd across the part's shapes if drawings need holes.
