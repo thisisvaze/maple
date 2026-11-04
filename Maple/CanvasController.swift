@@ -187,6 +187,8 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     var saveErrorShown = false
     let history = History()
     var strokeStart: PKDrawing?
+    var rubbed: [CGPoint] = []  // where the eraser has been this stroke, page points
+    var rub: History.Step?  // what the eraser did to pictures and dots this stroke, for the stroke's step of undo
     var quickShape: QuickShape!
     var quickMenu: QuickMenu!
     var marks: Marks!
@@ -296,6 +298,7 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
         turner.addGestureRecognizer(navigation)
         undoTap.require(toFail: navigation)
         redoTap.require(toFail: navigation)
+        canvas.drawingGestureRecognizer.addTarget(self, action: #selector(erasing))
         quickShape = QuickShape(controller: self)
         canvas.addGestureRecognizer(quickShape)
         quickMenu = QuickMenu(controller: self)
@@ -573,7 +576,32 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        // Before the pen is up, so the stroke's step of undo, recorded once its ink settles, has the pictures and dots too.
+        if let eraser = canvas.tool as? PKEraserTool, !rubbed.isEmpty {
+            let before = History.State(drawing: canvas.drawing, notes: marks.notes)
+            if marks.rubOut(rubbed, width: Self.reach(eraser)) {
+                let after = History.State(drawing: canvas.drawing, notes: marks.notes)
+                // A save while the pen was down already recorded the stroke: the rub is a step of its own.
+                if strokeStart == nil { history.record(from: before, to: after) } else { rub = History.Step(before, after) }
+            }
+        }
+        rubbed = []
         marks.penUp(writing: canvas.tool is PKInkingTool, editing: brushing)  // erasing isn't a mark
+    }
+
+    /// Follows the eraser over pictures and quiet dots, which aren't ink, so PencilKit's eraser can't reach them.
+    @objc func erasing(_ gesture: UIGestureRecognizer) {
+        guard let eraser = canvas.tool as? PKEraserTool, [.began, .changed].contains(gesture.state) else { return }
+        if gesture.state == .began { rubbed = [] }
+        let p = gesture.location(in: canvas), zoom = canvas.zoomScale
+        rubbed.append(CGPoint(x: p.x / zoom, y: p.y / zoom))
+        marks.rub(rubbed, width: Self.reach(eraser))
+    }
+
+    /// How wide the eraser rubs, page points: its width, as PencilKit clamps it.
+    static func reach(_ eraser: PKEraserTool) -> CGFloat {
+        let range = eraser.eraserType.validWidthRange
+        return min(max(eraser.width, range.lowerBound), range.upperBound)
     }
 
     /// The point size of the person's own ink, from their latest stroke, so a shape sits level with their writing.
@@ -611,10 +639,13 @@ final class CanvasController: UIViewController, PKCanvasViewDelegate, UIPencilIn
 
     /// PencilKit may deliver the final ink after pen-up; Marks calls this once that drawing has settled.
     func finishStroke() {
+        let rub = self.rub
+        self.rub = nil
         guard let before = strokeStart else { return }
         strokeStart = nil
-        history.record(from: History.State(drawing: before, notes: marks.notes),
-                       to: History.State(drawing: canvas.drawing, notes: marks.notes))
+        // Only the notes the eraser changed go back in this step, not an answer that arrived as the stroke settled.
+        let now = History.State(drawing: canvas.drawing, notes: marks.notes)
+        history.record(from: History.State(drawing: before, notes: rub?.applying(to: now, backwards: true).notes ?? now.notes), to: now)
         updateTools()
     }
 

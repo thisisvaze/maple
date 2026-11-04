@@ -781,6 +781,43 @@ final class Marks {
         }
     }
 
+    /// Covers the pictures under the eraser in paper as it rubs along `line`, page points `width` wide. Pictures and quiet
+    /// dots aren't ink, so PencilKit's own eraser can't reach them.
+    func rub(_ line: [CGPoint], width: CGFloat) { pictures.forEach { $0.rub(line, width: width) } }
+
+    /// Takes what an eraser stroke along `line`, `width` wide, rubbed out of what isn't ink: each picture it crossed kept
+    /// as a new file with that gone (undo brings back the old one), a picture rubbed away entirely gone, and the quiet
+    /// dots it touched gone. True if anything changed; the canvas records it with the stroke's ink, as one step of undo.
+    // ponytail: rubs out on the main thread as the pen lifts, a few ms a picture; move off it if big pictures stutter.
+    @discardableResult func rubOut(_ line: [CGPoint], width: CGFloat) -> Bool {
+        var changed = false
+        for view in pictures {
+            defer { view.endRub() }
+            guard let rubbed = view.rubbedOut(line, width: width), let i = notes.firstIndex(where: { $0 == view.note }) else { continue }
+            if !rubbed.left { notes.remove(at: i) }
+            else if let file = try? page.keep(rubbed.png, as: "png") { notes[i].picture = file }
+            else { continue }  // it couldn't be kept: the picture stays whole
+            changed = true
+        }
+        let zoom = canvas.zoomScale, quiet = Set(notes.filter { $0.inked == nil }.map(\.id))
+        var touched: Set<String> = []
+        for bubble in bubbles {
+            // In the bubble's own space, turned and scaled with the page: the dot you see, or the open answer's card.
+            let reach = width / 2 * zoom / hypot(bubble.transform.a, bubble.transform.b), dot = bubble.dot.frame
+            guard line.contains(where: { p in
+                let q = bubble.convert(CGPoint(x: p.x * zoom, y: p.y * zoom), from: canvas)
+                return bubble.open ? bubble.bounds.insetBy(dx: -reach, dy: -reach).contains(q) : hypot(q.x - dot.midX, q.y - dot.midY) <= dot.width / 2 + reach
+            }) else { continue }
+            if let id = bubble.note?.id, quiet.contains(id) { touched.insert(id) }
+            else if bubble.note == nil, bubble.retry != nil { bubble.deleted() }  // a failed try's badge, out of undo as its own trash is
+        }
+        notes.removeAll { touched.contains($0.id) }
+        guard changed || !touched.isEmpty else { return false }
+        save()
+        sync()
+        return true
+    }
+
     /// Takes away an answer or drawing the person scratched out, and the scratching, as one step of undo: its ink as it
     /// is then, which an edit may have rewritten meanwhile.
     func scratch(_ note: Note, _ trigger: [String]) {
@@ -1325,7 +1362,9 @@ final class Marks {
                         change.add += frames.map { var stroke = $0; stroke.transform = stroke.transform.concatenating(move); return stroke }
                         change.remove.formUnion(frames.map(Self.id))
                     }
-                    if let note = redraw.note {
+                    if var note = redraw.note {
+                        // A picture the eraser rubbed out while Muse worked keeps the rubbing, unless the edit repainted it.
+                        if note.picture != nil, pictures[target.id] == nil, let now = notes.first(where: { $0.id == target.id })?.picture { note.picture = now }
                         change.notes.append(note)
                         if note.picture == nil { drawings.append((note, redraw.fresh)) }
                     }

@@ -243,6 +243,7 @@ struct Check {
         try me()
         try snapping()
         try quickMenu()
+        try erasing()
         try savedHistory()
         try voicePlacement()
         try interface()
@@ -1038,6 +1039,107 @@ struct Check {
     }
 
     /// Draw, rest the pen, and it snaps: the page's side of what checks/shape-check.swift reads.
+    /// The eraser rubs a picture out where it goes, in the stroke's step of undo, rubs one away entirely, and takes the
+    /// quiet answers' dots it touches. Pictures and dots aren't ink, so PencilKit's own eraser can't reach them.
+    static func erasing() throws {
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let page = Page(url: folder, edited: .now)
+        defer {
+            Store.queue.sync {}
+            UserDefaults.standard.removeObject(forKey: page.viewportKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        UserDefaults.standard.set([2100.0, 3050.0, 1.0], forKey: page.viewportKey)
+        let controller = open(page), canvas = controller.canvas, marks = controller.marks!, history = controller.history
+        // A picture in a 200 × 100 box, painted 400 × 200 px in solid red, and a quiet answer's dot beside it.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let red = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 200), format: format).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 400, height: 200))
+        }
+        var picture = Note(mark: "frame", trigger: [], anchor: .zero, zoom: 1, reading: "red", reply: "red", turn: 0, rect: CGRect(x: 2000, y: 3000, width: 200, height: 100))
+        picture.picture = try page.keep(red.pngData()!, as: "png")
+        let quiet = Note(mark: "question", trigger: [], anchor: CGPoint(x: 2300, y: 3000), zoom: 1, reading: "why ?", reply: "Because.")
+        marks.notes = [picture, quiet]
+        marks.sync()
+        let bubble = marks.bubbles.first { $0.note?.id == quiet.id }!, zoom = canvas.zoomScale
+        let dot = bubble.convert(CGPoint(x: bubble.dot.frame.midX, y: bubble.dot.frame.midY), to: canvas).applying(CGAffineTransform(scaleX: 1 / zoom, y: 1 / zoom))
+        precondition(marks.pictures.count == 1, "the picture is on the page")
+        canvas.tool = controller.eraser
+        let width = CanvasController.reach(controller.eraser)
+        func erase(_ line: [CGPoint], saving: Bool = false) {
+            controller.canvasViewDidBeginUsingTool(canvas)
+            if saving { controller.finishStroke() }  // the app leaving with the pen down saves the stroke so far
+            controller.rubbed = line
+            controller.canvasViewDidEndUsingTool(canvas)
+        }
+
+        // Across the middle: covered in paper as it rubs, then kept in a new file, see-through only where it went.
+        let line = [CGPoint(x: 1990, y: 3050), CGPoint(x: 2100, y: 3050)]
+        controller.canvasViewDidBeginUsingTool(canvas)
+        marks.rub(line, width: width)
+        precondition(marks.pictures[0].layer.sublayers?.contains { $0 is CAShapeLayer } == true, "paper covers the picture under the eraser")
+        controller.rubbed = line
+        controller.canvasViewDidEndUsingTool(canvas)
+        let rubbed = marks.notes.first { $0.id == picture.id }!
+        precondition(rubbed.picture != picture.picture && marks.pictures[0].note == rubbed, "the rubbed picture is a new file")
+        let alpha = alphas(page.pictures.appending(path: rubbed.picture!), at: [CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 40), CGPoint(x: 300, y: 100)])
+        precondition(width > 30 && alpha == [0, 255, 255], "gone where the eraser went, whole elsewhere, at the picture's own detail: \(alpha)")
+        // An answer arriving as the stroke settles isn't the stroke's to undo.
+        let arrived = Note(mark: "double_question", trigger: [], anchor: CGPoint(x: 2300, y: 3200), zoom: 1, reading: "??", reply: "Later.")
+        marks.notes.append(arrived)
+        controller.finishStroke()
+        precondition(history.past.count == 1, "one step of undo")
+        history.undo()
+        precondition(marks.notes.first { $0.id == picture.id }?.picture == picture.picture && marks.pictures[0].note.picture == picture.picture, "undo brings it back whole")
+        precondition(marks.notes.contains { $0.id == arrived.id }, "and leaves the answer that arrived meanwhile")
+        history.redo()
+        precondition(marks.notes.first { $0.id == picture.id }?.picture == rubbed.picture)
+        marks.notes.removeAll { $0.id == arrived.id }
+        marks.sync()
+
+        // Strokes that take nothing make no file and no step: past the box's corner, over the strip already rubbed out,
+        // and near the dot without touching it.
+        let files = try FileManager.default.contentsOfDirectory(atPath: page.pictures.path).count, steps = history.past.count
+        erase([CGPoint(x: 2215, y: 2985)])  // 21 pt off the corner, diagonally: the eraser's end, 20.5 pt round, misses
+        erase([CGPoint(x: 2000, y: 3050), CGPoint(x: 2090, y: 3050)])
+        erase([CGPoint(x: dot.x, y: dot.y - 6 - width / 2 - 4)])
+        controller.finishStroke()
+        let unchanged = try FileManager.default.contentsOfDirectory(atPath: page.pictures.path).count
+        precondition(unchanged == files && history.past.count == steps && marks.notes.count == 2, "nothing taken, nothing kept: \(unchanged) files, \(history.past.count) steps")
+
+        // A save mid-stroke: the rub still gets its own step of undo.
+        erase([CGPoint(x: 2150, y: 3020)], saving: true)
+        precondition(history.past.count == steps + 1, "the rub after a save is its own step")
+        history.undo()
+        precondition(marks.notes.first { $0.id == picture.id }?.picture == rubbed.picture)
+
+        // Rubbed all over, it's gone, and the eraser passing over the dot takes the quiet answer; undo brings both back.
+        let zigzag = stride(from: 3000, through: 3100, by: 25).enumerated().flatMap { i, y in
+            (i % 2 == 0 ? [1980, 2220] : [2220, 1980]).map { CGPoint(x: CGFloat($0), y: CGFloat(y)) }  // back and forth, rows 25 apart
+        }
+        erase(zigzag + [dot])
+        precondition(marks.notes.isEmpty && marks.pictures.isEmpty && bubble.superview == nil, "a picture rubbed away and a dot rubbed out are gone: \(marks.notes.map(\.mark))")
+        controller.finishStroke()
+        history.undo()
+        precondition(marks.notes.map(\.id) == [picture.id, quiet.id] && marks.pictures.count == 1, "one undo brings both back")
+        print("erasing ok: pictures rubbed out where the eraser goes and kept at their own detail, rubbed away whole, quiet dots, misses and rubbed-out parts taking nothing, one step of undo")
+    }
+
+    /// The alpha, 0 to 255, of a picture file's pixels at `points`, counted from its top-left.
+    static func alphas(_ file: URL, at points: [CGPoint]) -> [UInt8] {
+        let image = UIImage(contentsOfFile: file.path)!.cgImage!
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        pixels.withUnsafeMutableBytes { bytes in
+            let context = CGContext(data: bytes.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        return points.map { pixels[(Int($0.y) * image.width + Int($0.x)) * 4 + 3] }
+    }
+
     static func snapping() throws {
         let folder = URL.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

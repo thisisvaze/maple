@@ -102,6 +102,87 @@ final class PictureView: UIImageView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func place(zoom: CGFloat) { pin(to: block, turn: turn, zoom: zoom) }
+
+    private var cover: CAShapeLayer?  // paper where the eraser has rubbed this stroke, until the file keeps it
+
+    /// Page points `line` in the picture's own points, from its box's top-left.
+    func local(_ line: [CGPoint]) -> [CGPoint] {
+        let frame = CGAffineTransform(rotationAngle: turn)
+        return line.map { $0.applying(frame) }.map { CGPoint(x: $0.x - block.minX, y: $0.y - block.minY) }
+    }
+
+    /// A line through `points`; one point is a dot, as a tap of the eraser rubs.
+    static func path(_ points: [CGPoint]) -> CGPath {
+        let path = CGMutablePath()
+        path.addLines(between: points.count == 1 ? points + points : points)
+        return path
+    }
+
+    /// Covers the picture in paper along the eraser's `line`, page points `width` wide, as it rubs.
+    func rub(_ line: [CGPoint], width: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let cover = cover ?? CAShapeLayer()
+        if self.cover == nil {
+            (cover.fillColor, cover.lineCap, cover.lineJoin) = (nil, .round, .round)
+            layer.addSublayer(cover)
+            self.cover = cover
+        }
+        cover.strokeColor = UIColor.paper.resolvedColor(with: traitCollection).cgColor
+        cover.lineWidth = width
+        cover.path = Self.path(local(line))
+        CATransaction.commit()
+    }
+
+    func endRub() {
+        cover?.removeFromSuperlayer()
+        cover = nil
+    }
+
+    /// The picture with `line`, page points `width` wide, rubbed out of it, as a PNG at its box's own shape, and whether
+    /// any of it is left. Nil when the eraser took nothing of it: it missed, or went over parts already rubbed out.
+    func rubbedOut(_ line: [CGPoint], width: CGFloat) -> (png: Data, left: Bool)? {
+        let local = local(line), box = CGRect(origin: .zero, size: block.size), side = max(box.width, box.height)
+        guard let image, image.size.width > 0, image.size.height > 0, side > 0,
+              local.contains(where: box.insetBy(dx: -width / 2, dy: -width / 2).contains) else { return nil }  // far off: nothing to render
+        func render(_ scale: CGFloat, rubbed: Bool, narrower: CGFloat = 0) -> UIImage {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = scale
+            return UIGraphicsImageRenderer(size: box.size, format: format).image { context in
+                image.fill(box)
+                guard rubbed else { return }
+                let cg = context.cgContext
+                cg.setBlendMode(.clear)
+                cg.setLineWidth(max(width - narrower, 0))
+                cg.setLineCap(.round)
+                cg.setLineJoin(.round)
+                cg.addPath(Self.path(local))
+                cg.strokePath()
+            }
+        }
+        // Seen 128 px a side, the eraser must take at least an eighth of a pixel, measured a little inside its edge, so going
+        // over a part already rubbed out doesn't count the soft edge it shaves.
+        let sample = 128 / side
+        guard Self.alphas(render(sample, rubbed: false)).reduce(0, +) - Self.alphas(render(sample, rubbed: true, narrower: 3 / sample)).reduce(0, +) > 32 else {
+            return nil
+        }
+        // At the detail the picture has in its box and no more: a big box drawn zoomed out holds few of its pixels a point.
+        guard let png = render(image.scale / max(box.width / image.size.width, box.height / image.size.height), rubbed: true).pngData() else { return nil }
+        // What's left, seen 32 px a side: any part of it still a tenth there.
+        return (png, Self.alphas(render(32 / side, rubbed: true)).contains { $0 > 25 })
+    }
+
+    /// Each of an image's pixels' alpha, 0 to 255.
+    static func alphas(_ image: UIImage) -> [Int] {
+        guard let cg = image.cgImage else { return [] }
+        var pixels = [UInt8](repeating: 0, count: cg.width * cg.height * 4)
+        pixels.withUnsafeMutableBytes { bytes in
+            CGContext(data: bytes.baseAddress, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: cg.width * 4,
+                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?
+                .draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        }
+        return stride(from: 3, to: pixels.count, by: 4).map { Int(pixels[$0]) }
+    }
 }
 
 extension UIView {

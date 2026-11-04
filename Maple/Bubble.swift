@@ -1,3 +1,4 @@
+import PencilKit
 import UIKit
 
 /// An answer beside its mark: a quiet dot that opens into a glass bubble. While Muse answers, the dot is the thinking
@@ -74,7 +75,9 @@ final class Bubble: UIView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     /// An open answer lets the Pencil write through it: only its buttons take touches.
+    /// The eraser's touch goes through to the page, where Marks rubs the dot out with the ink.
     override func point(inside p: CGPoint, with event: UIEvent?) -> Bool {
+        if (superview as? PKCanvasView)?.tool is PKEraserTool, event?.allTouches?.contains(where: { $0.type == .pencil }) == true { return false }
         guard open else { return super.point(inside: p, with: event) }
         return [close, trash].contains { $0.frame.insetBy(dx: -6, dy: -6).contains(p) }
     }
