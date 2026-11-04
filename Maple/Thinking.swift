@@ -149,7 +149,7 @@ final class Thinking: UIView {
     override var contentScaleFactor: CGFloat { didSet { sharpen() } }
 
     /// The light-mode blue Maple writes in, and PencilKit's own dark-mode version of it.
-    static let pencil = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0x69 / 255, green: 0x8F / 255, blue: 0xE0 / 255, alpha: 1) : AgentPen.blue }
+    static let pencil = UIColor { $0.userInterfaceStyle == .dark ? AgentPen.darkBlue : AgentPen.blue }
 
     init(style: Style) {
         self.style = style

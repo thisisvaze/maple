@@ -1017,7 +1017,7 @@ struct Check {
         parser.delegate = counter
         precondition(parser.parse(), "the SVG is well formed")
         let paths = counter.tags["path"] ?? [], images = counter.tags["image"] ?? []
-        precondition(paths.map { $0["stroke"]! } == ["#232322", "#1F4596"], "the person's graphite and Maple's blue, no coral: \(paths.map { $0["stroke"]! })")
+        precondition(paths.map { $0["stroke"]! } == ["#232322", "#1B54B5"], "the person's graphite and Maple's blue, no coral: \(paths.map { $0["stroke"]! })")
         precondition(images.count == 1 && images[0]["href"]!.hasPrefix("data:image/png;base64,") && images[0]["transform"]!.contains("rotate(-17.18"), "the picture, turned as it lies")
         let box = counter.tags["svg"]![0]["viewBox"]!.split(separator: " ").map { Double($0)! }
         let lies = picture.rect!.applying(CGAffineTransform(rotationAngle: -0.3)).union(canvas.drawing.strokes[0].renderBounds)

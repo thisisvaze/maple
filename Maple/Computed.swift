@@ -23,7 +23,7 @@ nonisolated struct Computed: Codable, Equatable, Sendable {
 
     static let longSide = 640.0  // calibration knob: pixels on a picture's long side
     static let seeds = 16.0  // calibration knob: flow lines across the box's long side, at most
-    static let paper: SIMD3<Double> = [0xFB, 0xFB, 0xFA], blue: SIMD3<Double> = [0x1F, 0x45, 0x96], coral: SIMD3<Double> = [0xD9, 0x48, 0x1C]
+    static let paper: SIMD3<Double> = [0xFB, 0xFB, 0xFA], blue: SIMD3<Double> = [0x1B, 0x54, 0xB5], coral: SIMD3<Double> = [0xD9, 0x48, 0x1C]
 
     /// Box points per unit, and the unit point at the box's centre: the whole region shows, however the box is shaped.
     func frame(_ size: CGSize) throws -> (scale: Double, middle: SIMD2<Double>) {

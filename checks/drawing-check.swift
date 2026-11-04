@@ -134,7 +134,7 @@ struct Check {
         let hydrogen = pixels(try Computed(field: "exp(-2*sqrt(x^2 + y^2))", xMin: -4, xMax: 4, yMin: -3, yMax: 3).raster(in: pictureBox))
         precondition(hydrogen.image.width == 600 && hydrogen.image.height == 400)
         let (centre, edge) = (colour(hydrogen, 300, 200), colour(hydrogen, 4, 4))
-        precondition(centre[2] < 170 && centre[0] < 60 && edge[0] > 240, "darkest at the nucleus, paper far away: \(centre) \(edge)")
+        precondition(centre[1] < 100 && centre[0] < 60 && edge[0] > 240, "darkest at the nucleus, paper far away: \(centre) \(edge)")
         let swing = pixels(try Computed(field: "sin(x)", xMin: -3.15, xMax: 3.15, yMin: -2, yMax: 2).raster(in: pictureBox))
         precondition(colour(swing, 150, 200)[0] > 200 && colour(swing, 150, 200)[2] < 90 && colour(swing, 450, 200)[0] < 60, "coral below zero, blue above")
         _ = try Computed(field: "1/(x^2 + y^2)", xMin: -1, xMax: 1, yMin: -1, yMax: 1).raster(in: pictureBox)  // a singularity is clipped, not fatal

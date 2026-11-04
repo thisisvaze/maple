@@ -29,7 +29,7 @@ final class Marks {
 
     /// The agent's blue for dots, bubbles and their text: the ink's blue, and in dark mode the colour PencilKit draws it in.
     static let ink = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0x69 / 255, green: 0x8F / 255, blue: 0xE0 / 255, alpha: 1)
+        ? AgentPen.darkBlue
         : AgentPen.blue }
 
     let canvas: PKCanvasView

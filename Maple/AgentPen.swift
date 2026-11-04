@@ -4,17 +4,21 @@ import PencilKit
 /// by colour: PencilKit stores colours exactly, but turned the .monoline ink Maple wrote in before 3 Nov into .pen when a
 /// page was saved and reopened (probed on the iOS 26.5 simulator, 29 Oct), so the ink type can't be trusted.
 nonisolated enum AgentPen {
-    /// The light-mode blue PencilKit stores. In dark mode PencilKit draws its own conversion, #698FE0: 5.4:1 on the dark
-    /// paper, and 8.6:1 for this one on the light paper.
-    static let blue = UIColor(red: 0x1F / 255, green: 0x45 / 255, blue: 0x96 / 255, alpha: 1)
+    /// The light-mode blue PencilKit stores, a bright fountain-pen blue (4 Nov): 6.8:1 on the light paper. In dark mode
+    /// PencilKit draws its own conversion, darkBlue: 4.6:1 on the dark paper (PKInkingTool.convertColor, probed 4 Nov).
+    /// Brighter blues convert darker and drop below 4.5:1 there.
+    static let blue = UIColor(red: 0x1B / 255, green: 0x54 / 255, blue: 0xB5 / 255, alpha: 1)
+    static let darkBlue = UIColor(red: 0x4A / 255, green: 0x82 / 255, blue: 0xE4 / 255, alpha: 1)
     static let ink = PKInk(.monoline, color: blue)  // `stroke`'s even line; Maple's own hand is `write`'s pencil
 
     /// Today's blue mixed 70% toward the light paper: an answer faded under the person's writing. PencilKit's dark-mode
     /// conversion keeps it faint on the dark paper too.
-    static let faded = UIColor(red: 0xB9 / 255, green: 0xC4 / 255, blue: 0xDC / 255, alpha: 1)
+    static let faded = UIColor(red: 0xB8 / 255, green: 0xC9 / 255, blue: 0xE5 / 255, alpha: 1)
 
-    /// The blues Maple has written in: today's, the lighter #2F5DB8 of pages made before 29 Oct, and today's faded.
-    static let blues: [SIMD3<Double>] = [[0x1F, 0x45, 0x96], [0x2F, 0x5D, 0xB8], [0xB9, 0xC4, 0xDC]].map { $0 / 255 }
+    /// The blues Maple has written in, each with its faded: today's, the deeper #1F4596 of pages made before 4 Nov, and
+    /// the lighter #2F5DB8 of pages made before 29 Oct.
+    static let blues: [SIMD3<Double>] = [[0x1B, 0x54, 0xB5], [0xB8, 0xC9, 0xE5], [0x1F, 0x45, 0x96], [0xB9, 0xC4, 0xDC], [0x2F, 0x5D, 0xB8]]
+        .map { $0 / 255 }
 
     /// The edit brush's deep coral, #D9481C, which PencilKit stores exactly too and draws as #E35226 on the dark paper
     /// (probed, 29 Oct): 4.1:1 on the light paper, 4.5:1 on the dark. Its marks tell Maple what to change; they are
