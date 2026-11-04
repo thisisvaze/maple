@@ -44,7 +44,7 @@ final class Marks {
     var written: [Written] = []  // over answers written in ink
     var drawingIn: [Written] = []  // over drawings while they draw themselves in
     var pictures: [PictureView] = []  // under the ink
-    var grids: [(view: Thinking, box: CGRect, turn: CGFloat)] = []  // over boxes being drawn in
+    var sketches: [(view: Thinking, box: CGRect, turn: CGFloat)] = []  // in boxes being drawn in
     var waiting: Task<Void, Never>?
     var lastTrigger: [String] = []
     var asking = 0
@@ -195,8 +195,8 @@ final class Marks {
         editing.removeAll()
         retire { _ in true }
         for bubble in bubbles where bubble.note == nil { remove(bubble) }
-        grids.forEach { $0.view.removeFromSuperview() }
-        grids.removeAll()
+        sketches.forEach { $0.view.removeFromSuperview() }
+        sketches.removeAll()
         lastTag?.removeFromSuperview()
     }
 
@@ -877,13 +877,17 @@ final class Marks {
 
     /// Fills an empty box, drawn level in the page turned by `turn`: with the agent's ink, a graph or figure the app works
     /// out, a picture computed from equations or painted by Muse Image, or if it could mean two things, a question written
-    /// beside it. A pixel grid shimmers in the box until it lands; if drawing fails, an orange dot at its corner tries
+    /// beside it. Maple's pencil sketches in the box until it lands; if drawing fails, an orange dot at its corner tries
     /// again. `asked` is that question, when the strokes `reply` answer it: both go as the box fills. `request` is what the
     /// person asked for out loud, when Maple drew the box.
     func draw(_ agent: Agent, _ near: Data, _ around: Data, threads: [Agent.Thread], trigger: [String], box: CGRect, turn: CGFloat, zoom: CGFloat,
               asked: Note? = nil, reply: [String] = [], request: String? = nil, memory: [Memory.Line] = []) async {
         guard active, present(trigger) else { return }
-        let done = shimmer(over: box, turn: turn)
+        // The box's own line, in its points from its top-left, so the sketch follows it.
+        let inBox = CGAffineTransform(rotationAngle: turn)
+        let outline = canvas.drawing.strokes.filter { trigger.contains(Self.id($0)) }.flatMap { Self.points($0, every: 2 / zoom).joined() }
+            .map { $0.applying(inBox) }.map { CGPoint(x: $0.x - box.minX, y: $0.y - box.minY) }
+        let done = sketch(over: box, turn: turn, outline: outline)
         asking += 1
         defer { asking -= 1 }
         let start = ContinuousClock.now
@@ -1076,16 +1080,17 @@ final class Marks {
         }
     }
 
-    /// A pixel grid shimmering over `box`, a rect in the page turned by `turn`, placed as the page zooms until the
-    /// returned closure takes it away.
-    func shimmer(over box: CGRect, turn: CGFloat) -> () -> Void {
-        let grid = Thinking(style: .pixels)
-        canvas.addSubview(grid)
-        grids.append((grid, box, turn))
-        grid.place(over: box, turn: turn, zoom: canvas.zoomScale)
-        return { [weak self, weak grid] in
-            grid?.removeFromSuperview()
-            self?.grids.removeAll { $0.view === grid }
+    /// Maple's pencil sketching in `box`, a rect in the page turned by `turn`, along `outline`, the box's drawn line in
+    /// its own points (none for a plain rect), placed as the page zooms until the returned closure takes it away.
+    func sketch(over box: CGRect, turn: CGFloat, outline: [CGPoint] = []) -> () -> Void {
+        let sketch = Thinking(style: .sketch)
+        sketch.outline = outline
+        canvas.addSubview(sketch)
+        sketches.append((sketch, box, turn))
+        sketch.place(over: box, turn: turn, zoom: canvas.zoomScale)
+        return { [weak self, weak sketch] in
+            sketch?.removeFromSuperview()
+            self?.sketches.removeAll { $0.view === sketch }
         }
     }
 
@@ -1095,7 +1100,7 @@ final class Marks {
         edit(Set(canvas.drawing.strokes.filter(AgentPen.edit).map(Self.id)))
     }
 
-    /// Changes Maple's drawings and answers that the edit marks `ids` point at. A pixel grid shimmers over each while
+    /// Changes Maple's drawings and answers that the edit marks `ids` point at. Maple's pencil sketches over each while
     /// Muse reads the marks, and the changes land at rest as one step of undo. Marks that point at nothing of Maple's
     /// just fade, and marks on what's already being edited wait for the next edit; if Muse fails or changes nothing,
     /// they stay, and an orange dot by them tries again.
@@ -1121,8 +1126,8 @@ final class Marks {
         let marks = Set(batch.marks.map(Self.id))
         let previous = prior ?? retrying.last { !$0.marks.isDisjoint(with: marks) }?.previous
         retire { !$0.isDisjoint(with: marks) }
-        let grids = batch.targets.map { shimmer(over: $0.rect ?? .zero, turn: $0.turn ?? 0) }
-        let done = { grids.forEach { $0() } }
+        let sketches = batch.targets.map { sketch(over: $0.rect ?? .zero, turn: $0.turn ?? 0) }
+        let done = { sketches.forEach { $0() } }
         var queued = false
         defer { if !queued { done(); editing.subtract(batch.ids) } }
         let dialogue = [previous, speech].compactMap { $0 }.joined(separator: "\n")
@@ -1155,7 +1160,7 @@ final class Marks {
         }
     }
 
-    /// An edit Muse couldn't make: the grids go, and the marks stay, free for the next edit, with an orange dot by them
+    /// An edit Muse couldn't make: the sketches go, and the marks stay, free for the next edit, with an orange dot by them
     /// that tries the same batch again, until an edit takes them or they're erased.
     func failed(_ batch: Batch, done: () -> Void, speech: String? = nil, question: String? = nil) {
         done()
@@ -1500,7 +1505,7 @@ final class Marks {
 
     /// Fades edit marks just taken off the page out where they lay: a picture of them over the page, which isn't redrawn
     /// under it.
-    // ponytail: placed once, so a pinch in its half second leaves it behind; track it in layout() like the grids if that shows.
+    // ponytail: placed once, so a pinch in its half second leaves it behind; track it in layout() like the sketches if that shows.
     func fadeOut(_ marks: [PKStroke]) {
         let rect = marks.reduce(CGRect.null) { $0.union($1.renderBounds) }, zoom = canvas.zoomScale
         guard !rect.isNull else { return }
@@ -1558,7 +1563,7 @@ final class Marks {
         bubbles.forEach { $0.place(zoom: canvas.zoomScale) }
         (written + drawingIn).forEach { $0.place(zoom: canvas.zoomScale) }
         pictures.forEach { $0.place(zoom: canvas.zoomScale) }
-        grids.forEach { $0.view.place(over: $0.box, turn: $0.turn, zoom: canvas.zoomScale) }
+        sketches.forEach { $0.view.place(over: $0.box, turn: $0.turn, zoom: canvas.zoomScale) }
     }
 
     func save() {

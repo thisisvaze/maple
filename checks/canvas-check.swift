@@ -227,13 +227,13 @@ struct Check {
         }, width: 3, step: 1)
         let box = Marks.bounds(level, turn: turn, zoom: 2)
         precondition(abs(box.width - 100 - 3) < 1 && box.height < 4, "level in the reading frame: \(box)")
-        let grid = Thinking(style: .pixels)
+        let grid = Thinking(style: .sketch)
         canvas.addSubview(grid)
         grid.place(over: CGRect(x: 2000, y: 3000, width: 80, height: 40), turn: turn, zoom: canvas.zoomScale)
         let corner = CGPoint(x: 2080, y: 3000).applying(CGAffineTransform(rotationAngle: -turn))
         near(grid.convert(CGPoint(x: 80, y: 0), to: canvas), CGPoint(x: corner.x * canvas.zoomScale, y: corner.y * canvas.zoomScale))
         let a = grid.convert(CGPoint.zero, to: controller.view), b = grid.convert(CGPoint(x: 80, y: 0), to: controller.view)
-        precondition(abs(a.y - b.y) < 0.5, "the grid reads level on screen")
+        precondition(abs(a.y - b.y) < 0.5, "the sketch reads level on screen")
         let turned = controller.marks.add(Bubble(anchor: CGPoint(x: 2000, y: 3000), zoom: 2, turn: turn))
         let c = turned.convert(CGPoint.zero, to: controller.view), d = turned.convert(CGPoint(x: 20, y: 0), to: controller.view)
         precondition(abs(c.y - d.y) < 0.5, "a bubble reads level on screen")
@@ -346,10 +346,33 @@ struct Check {
             precondition(orb.scribble.frame == orb.bounds && orb.scribble.path != nil && abs(orb.scribble.lineWidth - size * Scribble.width) < 0.001
                          && orb.scribble.strokeStart == 0 && orb.scribble.strokeEnd == 0.5, "one whole lap at every size, held still off screen")
         }
-        let loader = Thinking(style: .pixels)
-        loader.place(over: CGRect(x: 0, y: 0, width: 600, height: 400), turn: 0, zoom: 2)
-        loader.layoutIfNeeded()
-        precondition(loader.indicator!.scribble.contentsScale == loader.indicator!.contentScaleFactor * 2, "a zoomed page keeps the indicator's scribble sharp")
+        // A box being drawn in is sketched along its own line: the outside of what was drawn, moved in, and hatching
+        // that ends on that inner line.
+        let drawn = [CGPoint(x: 4, y: 10), CGPoint(x: 300, y: 2), CGPoint(x: 596, y: 8), CGPoint(x: 600, y: 390), CGPoint(x: 6, y: 398), CGPoint(x: 300, y: 200)]
+        let hull = Sketch.hull(drawn)
+        precondition(hull.count == 5 && !hull.contains(CGPoint(x: 300, y: 200)), "the outside of the drawn box: \(hull)")
+        let moved = Sketch.inset([CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 100), CGPoint(x: 0, y: 100)], by: 10)
+        precondition(zip(moved, [CGPoint(x: 10, y: 10), CGPoint(x: 90, y: 10), CGPoint(x: 90, y: 90), CGPoint(x: 10, y: 90)]).allSatisfy { hypot($0.x - $1.x, $0.y - $1.y) < 0.001 },
+                     "moved in evenly: \(moved)")
+        let inner = Sketch.inset(hull, by: 5)
+        var ends: [CGPoint] = []
+        Sketch.hatching(inner, gap: 7).applyWithBlock { ends.append($0.pointee.points[0]) }
+        func within(_ p: CGPoint) -> Bool {
+            let sides = inner.indices.map { i -> CGFloat in
+                let a = inner[i], b = inner[(i + 1) % inner.count]
+                return ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / hypot(b.x - a.x, b.y - a.y)
+            }
+            return sides.allSatisfy { $0 >= -0.01 } || sides.allSatisfy { $0 <= 0.01 }
+        }
+        precondition(ends.count > 100 && ends.allSatisfy(within), "hatching ends on the box's inner line: \(ends.count) ends")
+        let sketch = Thinking(style: .sketch)
+        sketch.outline = drawn
+        sketch.place(over: CGRect(x: 0, y: 0, width: 600, height: 400), turn: 0, zoom: 2)
+        sketch.layoutIfNeeded()
+        precondition(sketch.trace.path != nil && sketch.hatching.path != nil && sketch.trace.contentsScale == sketch.contentScaleFactor * 2,
+                     "a zoomed page keeps the sketch sharp")
+        precondition(abs(sketch.trace.lineWidth - Sketch.traceWidth / 2) < 0.001 && sketch.trace.strokeEnd == 1 && sketch.hatching.strokeEnd == 1,
+                     "sized on screen at the zoom it's placed at, and whole while still")
         let button = MapleButton(minimumWidth: 160)
         let presentations: [(String, MapleButton.Mark, String)] = [("Record", .symbol("mic"), ""), ("Allow mic", .loading, "×"), ("Recording", .waveform, "0:08"), ("Release to send", .symbol("arrow.up"), ""), ("Transcribing", .loading, "×"), ("Thinking", .orb, "×")]
         var widths: [CGFloat] = []
@@ -399,7 +422,7 @@ struct Check {
         precondition(controller.soundMaterial == .eraser)
         controller.cycle()
         precondition(controller.soundMaterial == .edit, "Pencil double-tap uses the same sound routing")
-        print("interface ok: scribble laps, sizes and sharpness, resting AI button, stable voice states, touch targets, tool dock, AI toggle and adjacent status")
+        print("interface ok: scribble laps, sizes and sharpness, box sketch, resting AI button, stable voice states, touch targets, tool dock, AI toggle and adjacent status")
     }
 
     static func voicePlacement() throws {
@@ -657,7 +680,7 @@ struct Check {
                      "taken back")
         canvas.drawing.strokes.append(cross)
 
-        // Through the edit's own path: Muse changing nothing is a failed edit, as Muse failing is. The grids go and the
+        // Through the edit's own path: Muse changing nothing is a failed edit, as Muse failing is. The sketches go and the
         // marks stay, free for the next edit, with an orange dot by them that tries them again. The dot goes once an edit
         // takes them, or they're erased.
         func orange() -> [Bubble] { marks.bubbles.filter { $0.retry != nil } }
@@ -666,10 +689,10 @@ struct Check {
         Offline.reply(#"{"reading": "a circle and a line, no words", "edits": []}"#)
         marks.penDown(editing: true)
         marks.penUp(writing: true, editing: true)
-        let reading = try await until(2.5) { !marks.grids.isEmpty }
-        precondition(reading && marks.grids.count == 2 && marks.editing.isSuperset(of: batch.ids), "a grid over each target while Muse reads")
+        let reading = try await until(2.5) { !marks.sketches.isEmpty }
+        precondition(reading && marks.sketches.count == 2 && marks.editing.isSuperset(of: batch.ids), "a sketch over each target while Muse reads")
         let failed = try await until(2) { !orange().isEmpty }, retry = orange().first
-        precondition(failed && orange().count == 1 && retry?.anchor == corner && marks.grids.isEmpty && marks.editing.isEmpty && !controller.history.canUndo
+        precondition(failed && orange().count == 1 && retry?.anchor == corner && marks.sketches.isEmpty && marks.editing.isEmpty && !controller.history.canUndo
                      && ids().isSuperset(of: [circle, cross].map(Marks.id)) && marks.notes.contains { $0.id == answer.id && $0.inked == answer.inked },
                      "no edits: the marks stay, with a dot by them to try again")
         _ = retry?.accessibilityActivate()  // Offline has nothing queued: it fails
@@ -916,7 +939,7 @@ struct Check {
         Offline.reply(#"{"reading":"move them","question":"Where should they go?","edits":[]}"#)
         try await marks.askVoice("Move them", editMarks: ids)
         precondition(marks.notes == [first, second] && marks.retrying.last?.dot.note?.reply == "Where should they go?")
-        precondition(marks.retrying.last?.previous?.contains("Move them") == true && marks.editing.isEmpty && marks.grids.isEmpty)
+        precondition(marks.retrying.last?.previous?.contains("Move them") == true && marks.editing.isEmpty && marks.sketches.isEmpty)
         // Reply to the question using the same marks; an explicit cancellation leaves them available.
         let cancelled = Task { try await marks.askVoice("Below", editMarks: ids) }
         cancelled.cancel()
@@ -929,7 +952,7 @@ struct Check {
         Offline.reply(String(decoding: try JSONSerialization.data(withJSONObject: ["reading": "below", "question": "", "edits": edits]), as: UTF8.self))
         try await marks.askVoice("Below", editMarks: ids)
         marks.flush()
-        precondition(marks.notes != [first, second] && marks.retrying.isEmpty && marks.editing.isEmpty && marks.grids.isEmpty)
+        precondition(marks.notes != [first, second] && marks.retrying.isEmpty && marks.editing.isEmpty && marks.sketches.isEmpty)
         marks.voiceActive = false
         marks.stop()
         print("move/resize ok: rotated page, zoom, shared sizing, pictures, ink, undo/redo, save, invalid placements, collisions, stale selection, voice hold and clarification")
@@ -1486,7 +1509,7 @@ struct Check {
         Offline.reply(drawing("ask", #", "question": "The planet or the element?""#))
         await fill()
         let question = marks.notes.last!
-        precondition(question.mark == "ask" && question.reply == "The planet or the element?" && question.asked?.box == box && marks.grids.isEmpty, "asked: \(question)")
+        precondition(question.mark == "ask" && question.reply == "The planet or the element?" && question.asked?.box == box && marks.sketches.isEmpty, "asked: \(question)")
         precondition(!marks.strokes(of: question).isEmpty && question.inked != nil, "in ink beside the box, no bubble")
         let reply = theirs([CGPoint(x: 2050, y: 3050), CGPoint(x: 2120, y: 3060)])
         canvas.drawing.strokes.append(reply)

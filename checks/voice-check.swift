@@ -166,13 +166,13 @@ struct Check {
         while resume == nil { await Task.yield() }
         let oldWork = Array(marks.work.values)
         marks.add(Bubble(anchor: .zero, zoom: 1, turn: 0))
-        _ = marks.shimmer(over: CGRect(x: 0, y: 0, width: 100, height: 100), turn: 0)
+        _ = marks.sketch(over: CGRect(x: 0, y: 0, width: 100, height: 100), turn: 0)
         controller.voice!.squeeze(.began)
         precondition(controller.pencilSound.suspended, "microphone setup mutes pencil playback")
         controller.toggleAI()
         precondition(!Marks.aiEnabled && !marks.enabled && !controller.voice!.button.isEnabled)
         precondition(controller.voice!.state == .idle && !controller.pencilSound.suspended, "AI off cancels voice setup")
-        precondition(marks.pending.isEmpty && marks.grids.isEmpty && marks.bubbles.allSatisfy { $0.note != nil })
+        precondition(marks.pending.isEmpty && marks.sketches.isEmpty && marks.bubbles.allSatisfy { $0.note != nil })
         marks.run { disabledRan = true }
         marks.penUp(writing: true)
         marks.look()

@@ -33,46 +33,106 @@ nonisolated enum Scribble {
     }
 }
 
-/// Grey cells about a 32nd of the box, with a soft diagonal wave and scattered grain.
-nonisolated enum PixelGrid {
-    struct Cell {
-        var rect: CGRect
-        var alpha: Double
+/// What fills an empty box while Maple draws in it, in pencil on the page: Maple's blue pencil traces just inside the
+/// box's own line, then light hatching fills it, both fade, and it starts again. Everything follows the line the box was
+/// drawn with, so it fits a slanted or wobbly box; a box with no drawn line, like a picture being edited, uses its rect.
+nonisolated enum Sketch {
+    // Calibration knobs, in screen points at the zoom the box was drawn at, and seconds.
+    static let traceInset: CGFloat = 7, hatchInset: CGFloat = 5, gap: CGFloat = 7
+    static let traceWidth: CGFloat = 2.2, hatchWidth: CGFloat = 1.1, wobble: CGFloat = 0.6
+    static let trace: CFTimeInterval = 1.1, hatch: CFTimeInterval = 1.6, hold: CFTimeInterval = 0.3, fade: CFTimeInterval = 0.6
+    static var cycle: CFTimeInterval { trace + hatch + hold + fade }
+
+    /// The convex hull of `points`, clockwise on screen from its leftmost point: the outside of a drawn box.
+    static func hull(_ points: [CGPoint]) -> [CGPoint] {
+        let sorted = points.sorted { $0.x == $1.x ? $0.y < $1.y : $0.x < $1.x }
+        guard sorted.count > 2 else { return sorted }
+        func turnsLeft(_ o: CGPoint, _ a: CGPoint, _ b: CGPoint) -> Bool { (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x) > 0 }
+        func chain(_ ordered: [CGPoint]) -> [CGPoint] {
+            var out: [CGPoint] = []
+            for p in ordered {
+                while out.count >= 2, !turnsLeft(out[out.count - 2], out[out.count - 1], p) { out.removeLast() }
+                out.append(p)
+            }
+            return out
+        }
+        return Array(chain(sorted).dropLast() + chain(sorted.reversed()).dropLast())
     }
 
-    static func frame(size: CGSize, at t: Double) -> [Cell] {
-        let area = CGRect(origin: .zero, size: size).insetBy(dx: size.width * 0.06, dy: size.height * 0.06)
-        guard area.width > 0, area.height > 0 else { return [] }
-        let side = max(8, max(area.width, area.height) / 32)
-        var cells: [Cell] = []
-        for row in 0..<Int((area.height / side).rounded(.up)) {
-            for column in 0..<Int((area.width / side).rounded(.up)) {
-                let x = Double(column), y = Double(row)
-                let grain = sin(x * 12.9898 + y * 78.233) * 43758.5453, phase = (grain - grain.rounded(.down)) * 2 * .pi
-                let wave = (1 + sin(x * 0.24 + y * 0.18 - t * 1.2)) / 2
-                let rect = CGRect(x: area.minX + CGFloat(column) * side, y: area.minY + CGFloat(row) * side, width: side, height: side)
-                cells.append(Cell(rect: rect.intersection(area), alpha: 0.035 + 0.07 * (1 + sin(t * 0.8 + phase)) / 2 + 0.09 * wave))
-            }
+    /// The convex `polygon` moved `d` inward: each corner along the bisector of its sides, as far as keeps both sides
+    /// `d` in, and no further than 2d at a sharp tip.
+    static func inset(_ polygon: [CGPoint], by d: CGFloat) -> [CGPoint] {
+        let n = polygon.count
+        guard n > 2 else { return polygon }
+        let middle = CGPoint(x: polygon.map(\.x).reduce(0, +) / CGFloat(n), y: polygon.map(\.y).reduce(0, +) / CGFloat(n))
+        func inward(_ a: CGPoint, _ b: CGPoint) -> CGVector {
+            let length = hypot(b.x - a.x, b.y - a.y)
+            guard length > 0 else { return .zero }
+            let v = CGVector(dx: (a.y - b.y) / length, dy: (b.x - a.x) / length)
+            return (middle.x - a.x) * v.dx + (middle.y - a.y) * v.dy < 0 ? CGVector(dx: -v.dx, dy: -v.dy) : v
         }
-        return cells
+        // The sides each corner moves off are read from the nearest corners at least d away, so a cluster of close
+        // points, where the pen overshot a corner, doesn't swing it out of line.
+        func neighbour(_ i: Int, _ step: Int) -> CGPoint {
+            var j = (i + step + n) % n
+            while j != i, hypot(polygon[j].x - polygon[i].x, polygon[j].y - polygon[i].y) < d { j = (j + step + n) % n }
+            return polygon[j]
+        }
+        return polygon.indices.map { i in
+            let p = polygon[i], before = inward(neighbour(i, -1), p), after = inward(p, neighbour(i, 1))
+            let sum = CGVector(dx: before.dx + after.dx, dy: before.dy + after.dy), length = hypot(sum.dx, sum.dy)
+            guard length > 0 else { return p }
+            let m = CGVector(dx: sum.dx / length, dy: sum.dy / length), reach = d / max(m.dx * after.dx + m.dy * after.dy, 0.5)
+            return CGPoint(x: p.x + m.dx * reach, y: p.y + m.dy * reach)
+        }
+    }
+
+    /// The closed `polygon` as points about `step` apart, from its top-left corner, back to where it began.
+    static func around(_ polygon: [CGPoint], every step: CGFloat) -> [CGPoint] {
+        guard let start = polygon.indices.min(by: { polygon[$0].x + polygon[$0].y < polygon[$1].x + polygon[$1].y }), step > 0 else { return polygon }
+        let ring = Array(polygon[start...] + polygon[..<start]) + [polygon[start]]
+        return zip(ring, ring.dropFirst()).flatMap { a, b in
+            let count = max(1, Int((hypot(b.x - a.x, b.y - a.y) / step).rounded()))
+            return (0..<count).map { k in CGPoint(x: a.x + (b.x - a.x) * CGFloat(k) / CGFloat(count), y: a.y + (b.y - a.y) * CGFloat(k) / CGFloat(count)) }
+        } + [ring[0]]
+    }
+
+    /// Lines `gap` apart at `angle`, each cut to the convex `polygon`, swept from one side to the other.
+    static func hatching(_ polygon: [CGPoint], gap: CGFloat, angle: CGFloat = -.pi / 4) -> CGPath {
+        let path = CGMutablePath(), along = CGVector(dx: cos(angle), dy: sin(angle)), across = CGVector(dx: -along.dy, dy: along.dx)
+        let offsets = polygon.map { $0.x * across.dx + $0.y * across.dy }
+        guard let low = offsets.min(), let high = offsets.max(), gap > 0 else { return path }
+        for o in stride(from: low + gap / 2, to: high, by: gap) {
+            var hits: [CGFloat] = []  // where this line crosses the polygon's sides, measured along it
+            for i in polygon.indices {
+                let j = (i + 1) % polygon.count, oa = offsets[i] - o, ob = offsets[j] - o
+                guard (oa <= 0) != (ob <= 0) else { continue }
+                let f = oa / (oa - ob), a = polygon[i], b = polygon[j]
+                hits.append((a.x + (b.x - a.x) * f) * along.dx + (a.y + (b.y - a.y) * f) * along.dy)
+            }
+            guard let from = hits.min(), let to = hits.max(), to > from else { continue }
+            path.move(to: CGPoint(x: across.dx * o + along.dx * from, y: across.dy * o + along.dy * from))
+            path.addLine(to: CGPoint(x: across.dx * o + along.dx * to, y: across.dy * o + along.dy * to))
+        }
+        return path
     }
 }
 
-/// A thinking animation: the scribble in an answer's dot, or the pixel grid over a box being drawn in.
+/// A thinking animation: the scribble in an answer's dot, or the sketch in a box being drawn in.
 final class Thinking: UIView {
-    enum Style { case orb, pixels }
+    enum Style { case orb, sketch }
     let style: Style
     /// The scribble chases round the ring; false holds one lap, as on the AI button at rest.
     var thinking = true { didSet { if thinking != oldValue { restart() } } }
     var active = UIApplication.shared.applicationState == .active
     let scribble = CAShapeLayer()
-    let texture = CALayer()
-    var cells: [CAShapeLayer] = []
-    private var textureSize = CGSize.zero
+    let trace = CAShapeLayer(), hatching = CAShapeLayer()  // the sketch's pencil line round the box, and its hatching
+    /// The box's drawn line, in the box's own points from its top-left; empty for a box with no line, which uses its rect.
+    var outline: [CGPoint] = [] { didSet { sketched = .zero; setNeedsLayout() } }
+    private var sketched = CGRect.zero  // the bounds the sketch was last made for
     private var scribbleBounds = CGRect.zero
-    private var takes: [CGPath] = []
-    var indicator: Thinking?
-    /// The page's zoom on a box being drawn in, so the scribble is drawn sharp at its size on screen.
+    private var takes: [CGPath] = []  // the scribble's, or the trace's, three hand-drawn takes
+    /// The page's zoom on a box being drawn in: the sketch's lines are sized for it, and drawn sharp at it.
     var pageZoom: CGFloat = 1 { didSet { sharpen() } }
     override var contentScaleFactor: CGFloat { didSet { sharpen() } }
 
@@ -84,23 +144,15 @@ final class Thinking: UIView {
         super.init(frame: .zero)
         isOpaque = false
         isUserInteractionEnabled = false
-        if style == .orb {
-            (scribble.fillColor, scribble.lineCap, scribble.lineJoin) = (nil, .round, .round)
-            layer.addSublayer(scribble)
-            sharpen()
-        } else {
-            layer.addSublayer(texture)
-            cells = (0..<4).map { _ in
-                let cells = CAShapeLayer()
-                texture.addSublayer(cells)
-                return cells
-            }
-            let orb = Thinking(style: .orb)
-            addSubview(orb)
-            indicator = orb
+        for shape in style == .orb ? [scribble] : [hatching, trace] {
+            (shape.fillColor, shape.lineCap, shape.lineJoin) = (nil, .round, .round)
+            layer.addSublayer(shape)
+        }
+        if style == .sketch {
             isAccessibilityElement = true
             accessibilityLabel = "Working on this image"
         }
+        sharpen()
         updateColors()
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: Thinking, _: UITraitCollection) in view.updateColors() }
         let center = NotificationCenter.default  // selector observers leave with the view
@@ -122,64 +174,82 @@ final class Thinking: UIView {
         super.layoutSubviews()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        scribble.frame = bounds
+        for shape in [scribble, trace, hatching] { shape.frame = bounds }
         if style == .orb, bounds.width > 0, bounds.height > 0, bounds != scribbleBounds {
             scribbleBounds = bounds
             takes = (0..<3).map { Scribble.path($0, in: bounds) }
             scribble.lineWidth = min(bounds.width, bounds.height) * Scribble.width
             scribble.removeAllAnimations()  // its takes were for the old size
         }
-        if style == .pixels, bounds.size != textureSize {
-            textureSize = bounds.size
-            // Four retained shades let Core Animation breathe the texture without repainting it during a pinch.
-            let paths = (0..<4).map { _ in CGMutablePath() }
-            for cell in PixelGrid.frame(size: bounds.size, at: 0.6) {
-                let bin = min(3, max(0, Int((cell.alpha - 0.035) / 0.04)))
-                paths[bin].addRect(cell.rect)
-            }
-            for (cell, path) in zip(cells, paths) { cell.path = path }
-        }
+        if style == .sketch, bounds.width > 0, bounds.height > 0, bounds != sketched { makeSketch() }
         CATransaction.commit()
-        let side = min(40 / pageZoom, min(bounds.width, bounds.height) * 0.65)
-        indicator?.pageZoom = pageZoom
-        indicator?.frame = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
-        if style == .orb { animate() }
+        animate()
+    }
+
+    /// The trace's takes and the hatching for this box, sized in screen points at the zoom it's placed at; a pinch
+    /// afterwards scales them with the page, like ink.
+    private func makeSketch() {
+        sketched = bounds
+        let unit = 1 / pageZoom, side = min(bounds.width, bounds.height)
+        let corners = [CGPoint.zero, CGPoint(x: bounds.width, y: 0), CGPoint(x: bounds.width, y: bounds.height), CGPoint(x: 0, y: bounds.height)]
+        let hull = Sketch.hull(outline.count > 2 ? outline : corners)
+        // A small box keeps a little room in the middle rather than turning itself inside out.
+        let line = Sketch.around(Sketch.inset(hull, by: min(Sketch.traceInset * unit, side / 6)), every: 3 * unit)
+        let middle = CGPoint(x: bounds.midX, y: bounds.midY)
+        takes = (0..<3).map { take in
+            let path = CGMutablePath()
+            path.addLines(between: line.enumerated().map { i, p in
+                let out = CGVector(dx: p.x - middle.x, dy: p.y - middle.y), length = max(hypot(out.dx, out.dy), 1)
+                let shift = Sketch.wobble * unit * sin(CGFloat(i % (line.count - 1)) * 0.9 + CGFloat(take) * 2.1) / length
+                return CGPoint(x: p.x + out.dx * shift, y: p.y + out.dy * shift)
+            })
+            return path
+        }
+        trace.lineWidth = Sketch.traceWidth * unit
+        hatching.path = Sketch.hatching(Sketch.inset(hull, by: min(Sketch.hatchInset * unit, side / 8)), gap: Sketch.gap * unit)
+        hatching.lineWidth = Sketch.hatchWidth * unit
+        trace.removeAllAnimations()
+        hatching.removeAllAnimations()
     }
 
     @objc func pause() { active = false; animate() }
     @objc func resume() { active = true; animate() }
 
-    /// Runs only while shown, in the foreground, and without Reduce Motion, which keeps one lap still. All of it is
-    /// Core Animation's: no display link, and nothing redrawn on the main thread.
+    /// Runs only while shown, in the foreground, and without Reduce Motion, which keeps one lap, or the whole sketch,
+    /// still. All of it is Core Animation's: no display link, and nothing redrawn on the main thread.
     @objc func animate() {
-        let running = window != nil && !isHidden && active && !UIAccessibility.isReduceMotionEnabled
-        if style == .pixels {
-            indicator?.isHidden = isHidden
-            if running, texture.animation(forKey: "shimmer") == nil {
-                let shimmer = CABasicAnimation(keyPath: "opacity")
-                shimmer.fromValue = 0.65
-                shimmer.toValue = 1
-                shimmer.duration = 2.2
-                shimmer.autoreverses = true
-                shimmer.repeatCount = .infinity
-                texture.add(shimmer, forKey: "shimmer")
-            } else if !running { texture.removeAnimation(forKey: "shimmer") }
-            return
-        }
         guard !takes.isEmpty else { return }
-        let chasing = running && thinking
+        let running = window != nil && !isHidden && active && !UIAccessibility.isReduceMotionEnabled
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        if style == .sketch {
+            (trace.path, trace.strokeEnd, hatching.strokeEnd) = (takes[0], 1, 1)
+            guard running else { return [trace, hatching].forEach { $0.removeAllAnimations() } }
+            guard hatching.animation(forKey: "sketch") == nil else { return }
+            let cycle = Sketch.cycle, fading = Sketch.trace + Sketch.hatch + Sketch.hold
+            func keys(_ path: String, _ values: [CGFloat], at times: [CFTimeInterval]) -> CAKeyframeAnimation {
+                let keys = CAKeyframeAnimation(keyPath: path)
+                (keys.values, keys.keyTimes) = (values, times.map { NSNumber(value: $0 / cycle) })
+                return keys
+            }
+            func looping(_ parts: [CAAnimation]) -> CAAnimationGroup {
+                let group = CAAnimationGroup()
+                (group.animations, group.duration, group.repeatCount) = (parts, cycle, .infinity)
+                return group
+            }
+            let fade = keys("opacity", [1, 1, 0], at: [0, fading, cycle])
+            let draw = keys("strokeEnd", [0, 1, 1], at: [0, Sketch.trace, cycle])
+            draw.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .linear)]
+            trace.add(looping([draw, fade]), forKey: "sketch")
+            hatching.add(looping([keys("strokeEnd", [0, 0, 1, 1], at: [0, Sketch.trace, Sketch.trace + Sketch.hatch, cycle]), fade]), forKey: "sketch")
+            trace.add(boil(hold: Scribble.hold(thinking: true)), forKey: "boil")
+            return
+        }
+        let chasing = running && thinking
         (scribble.path, scribble.strokeStart, scribble.strokeEnd) = (takes[0], 0, chasing ? Scribble.shown / 2 : 0.5)
         if !running { scribble.removeAllAnimations() }
-        if running, scribble.animation(forKey: "boil") == nil {
-            let boil = CAKeyframeAnimation(keyPath: "path")
-            boil.values = takes
-            boil.calculationMode = .discrete
-            boil.duration = Scribble.hold(thinking: thinking) * Double(takes.count)
-            boil.repeatCount = .infinity
-            scribble.add(boil, forKey: "boil")
-        }
+        if running, scribble.animation(forKey: "boil") == nil { scribble.add(boil(hold: Scribble.hold(thinking: thinking)), forKey: "boil") }
         // The path holds two laps: drawing from one lap's point to the same point a lap on loops without a seam.
         if chasing, scribble.animation(forKey: "chase") == nil {
             let start = CABasicAnimation(keyPath: "strokeStart"), end = CABasicAnimation(keyPath: "strokeEnd")
@@ -191,7 +261,16 @@ final class Thinking: UIView {
             chase.repeatCount = .infinity
             scribble.add(chase, forKey: "chase")
         }
-        CATransaction.commit()
+    }
+
+    /// The line flickering between its three hand-drawn takes, each held `hold` seconds.
+    private func boil(hold: CFTimeInterval) -> CAKeyframeAnimation {
+        let boil = CAKeyframeAnimation(keyPath: "path")
+        boil.values = takes
+        boil.calculationMode = .discrete
+        boil.duration = hold * Double(takes.count)
+        boil.repeatCount = .infinity
+        return boil
     }
 
     /// Starts again for a new state: thinking chases and boils fast, at rest it holds a lap and boils slowly.
@@ -200,9 +279,9 @@ final class Thinking: UIView {
         animate()
     }
 
-    private func sharpen() { scribble.contentsScale = contentScaleFactor * pageZoom }
+    private func sharpen() { [scribble, trace, hatching].forEach { $0.contentsScale = contentScaleFactor * pageZoom } }
 
-    /// The texture scales as vector paths; zoom never allocates or redraws a page-sized bitmap.
+    /// The sketch is vector paths; zoom never allocates or redraws a page-sized bitmap.
     func place(over box: CGRect, turn: CGFloat, zoom: CGFloat) {
         pageZoom = max(zoom, 0.1)
         layer.anchorPoint = .zero
@@ -211,16 +290,8 @@ final class Thinking: UIView {
     }
 
     private func updateColors() {
-        guard style == .pixels else {
-            scribble.strokeColor = Self.pencil.resolvedColor(with: traitCollection).cgColor
-            return
-        }
-        backgroundColor = .paper.withAlphaComponent(0.6)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for (i, cell) in cells.enumerated() {
-            cell.fillColor = UIColor.secondaryLabel.resolvedColor(with: traitCollection).withAlphaComponent((0.055 + Double(i) * 0.04) * 0.3).cgColor
-        }
-        CATransaction.commit()
+        scribble.strokeColor = Self.pencil.resolvedColor(with: traitCollection).cgColor
+        trace.strokeColor = scribble.strokeColor
+        hatching.strokeColor = UIColor.label.withAlphaComponent(0.28).resolvedColor(with: traitCollection).cgColor  // a soft graphite
     }
 }

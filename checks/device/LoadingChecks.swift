@@ -13,7 +13,7 @@ extension DeviceChecks {
         host.view.backgroundColor = .paper
         host.view.clipsToBounds = true
         window.isHidden = false
-        let loaders = (0..<3).map { _ in Thinking(style: .pixels) }
+        let loaders = (0..<3).map { _ in Thinking(style: .sketch) }
         let orbs = [24.0, 34, 40].enumerated().map { i, size in
             let orb = Thinking(style: .orb)
             orb.frame = CGRect(x: 30 + i * 60, y: 40, width: Int(size), height: Int(size))
@@ -25,7 +25,7 @@ extension DeviceChecks {
             loader.place(over: CGRect(x: 25, y: 100 + i * 240, width: 600, height: 400), turn: 0, zoom: 1)
             loader.layoutIfNeeded()
         }
-        let paths = loaders.map { $0.cells.map(\.path) }
+        let paths = loaders.map { [$0.trace.path, $0.hatching.path] }
         let scales = loaders.map(\.contentScaleFactor)
         let probe = LoadingProbe(loaders)
         let link = CADisplayLink(target: probe, selector: #selector(LoadingProbe.tick))
@@ -47,25 +47,23 @@ extension DeviceChecks {
         #expect(gaps.count >= 200, "Loading should leave enough main-thread time for a 60 Hz pinch.")
         #expect(report["p95_ms"]! < 34, "Loading must not stall most zoom frames.")
         for (i, loader) in loaders.enumerated() {
-            #expect(loader.layer.contents == nil, "The texture needs no bitmap backing.")
-            #expect(loader.contentScaleFactor == scales[i] && loader.cells.count == 4)
-            for (cell, path) in zip(loader.cells, paths[i]) {
-                #expect(path != nil && cell.path === path, "Zoom must reuse the texture paths.")
-            }
-            let indicator = try #require(loader.indicator)
-            #expect(abs(indicator.bounds.width * loader.pageZoom - 40) < 0.01)
-            #expect(!loader.isUserInteractionEnabled && !indicator.isUserInteractionEnabled)
-            #expect(loader.texture.animation(forKey: "shimmer") != nil && indicator.scribble.animation(forKey: "chase") != nil)
+            #expect(loader.layer.contents == nil, "The sketch needs no bitmap backing.")
+            #expect(loader.contentScaleFactor == scales[i])
+            #expect(paths[i].allSatisfy { $0 != nil } && loader.trace.path === paths[i][0] && loader.hatching.path === paths[i][1],
+                    "Zoom must reuse the sketch's paths.")
+            #expect(!loader.isUserInteractionEnabled)
+            func sketching() -> Bool { loader.trace.animation(forKey: "sketch") != nil && loader.hatching.animation(forKey: "sketch") != nil }
+            #expect(sketching())
             loader.isHidden = true
-            #expect(loader.texture.animation(forKey: "shimmer") == nil && indicator.scribble.animation(forKey: "chase") == nil)
+            #expect(!sketching())
             loader.isHidden = false
-            #expect(loader.texture.animation(forKey: "shimmer") != nil && indicator.scribble.animation(forKey: "chase") != nil)
+            #expect(sketching())
             loader.pause()
-            #expect(loader.texture.animation(forKey: "shimmer") == nil)
+            #expect(!sketching())
             loader.resume()
-            #expect(loader.texture.animation(forKey: "shimmer") != nil)
+            #expect(sketching())
             loader.removeFromSuperview()
-            #expect(loader.texture.animation(forKey: "shimmer") == nil && indicator.scribble.animation(forKey: "chase") == nil)
+            #expect(!sketching())
         }
     }
 }
