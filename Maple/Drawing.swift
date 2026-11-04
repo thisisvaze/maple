@@ -21,8 +21,8 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var fill: String? = nil  // one of `fills` colours its closed shapes in; anything else, or none, leaves them open
         var role: String? = nil  // in a hand: "detail" draws lighter, "arrow" flicks its short strokes; "fill" only colours its
         // closed shapes in, with no line round them (a traced painting's colour, whose lines are their own part); "traced" is
-        // a traced painting's lines, drawn steady: no lift at corners, where a painting's every small kink would break them
-        // into scribbles, and no bow or drift; nil or else is a main line
+        // a traced painting's lines, drawn steady in pen: no lift at corners, where a painting's every small kink would break
+        // them into scribbles, no bow or drift, and none of the pencil's grain; nil or else is a main line
     }
 
     /// One line Maple's pencil draws, and how: `lines` in the order they're drawn and stacked.
@@ -33,7 +33,7 @@ nonisolated struct Drawing: Codable, Equatable, Sendable {
         var cap: CGFloat? = nil  // a letter's capital height, so the pen can write small labels finer
         var fill: String? = nil  // the colour colouring in is done in
         var kind = Kind.main
-        var steady = false  // a traced painting's line: drawn without the bow and drift a hand gives Muse's own lines
+        var steady = false  // a traced painting's line: drawn in pen, like answers, without the bow and drift a hand gives Muse's own lines
     }
 
     /// The coloured pencils a part can be coloured in with (AgentPen.fills has their colours).
