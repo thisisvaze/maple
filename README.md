@@ -1,5 +1,7 @@
 # Maple
 
+![Maple concept: app sketches in graphite with a guest-booking path in blue and violet.](docs/maple-app-flow-candid.webp)
+
 A notebook that thinks with you.
 
 For visual thinkers who work ideas out with a pencil. Made for iPad and Apple Pencil.
