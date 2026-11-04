@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 /// A pen face: every glyph is a few pen strokes, so the agent's labels and answers are written like a pen, as real ink,
-/// not typeset. Maple Hand (hand.json, Handlee traced into strokes; see Hand-LICENSE.txt) writes them, and the Hershey
+/// not typeset. Maple Hand (hand.json, Kalam traced into strokes; see Hand-LICENSE.txt) writes them, and the Hershey
 /// Greek face (greek.jhf, see Hershey-LICENSE.txt) its Greek letters.
 nonisolated struct Hershey: Sendable {
     struct Glyph: Sendable {

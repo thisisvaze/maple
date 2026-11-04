@@ -12,7 +12,7 @@ Built from scratch for the [Meta Global AI Developer Hackathon](https://cerebral
 
 0.6 s after the pen rests, Jev reads the gesture the new ink makes. A confirmed mark shows briefly above the tool dock, without confidence scores.
 
-- **`?`** is answered in Maple's fine blue pen right beside it, in Handlee's hand with real math (powers, ±, √, Greek).
+- **`?`** is answered in Maple's fine blue pen right beside it, in Kalam's hand with real math (powers, ±, √, Greek).
 - **A double dot**, which the iPad reads from its timing, is answered the same way.
 - **`??`** thinks harder: the question goes to Muse Wonder at medium effort instead of Spark at minimal. Its longer answer, explaining why, is written in ink like any answer, and stays a quiet dot only when there's no room (15 to 18 s for "why is e^iπ = −1 ??"). Like every answer, it streams: tap the thinking dot to watch it arrive, Wonder's summary of its thinking first when it gives one.
 - **`=` with nothing after it** gets only the value, on the rest of the line: "75% of 500 g =" gets 375 g, and "R =" gets 8.314 J/(mol·K).
@@ -132,4 +132,4 @@ MODEL_API_KEY=... TYPESAFE_API_KEY=... /tmp/live-check [folder]   # Jev reads ma
 
 Maple is under the MIT License; see [LICENSE](LICENSE). The fonts below keep their own licenses.
 
-Maple writes its answers and drawing labels in Maple Hand: [Handlee](https://fonts.google.com/specimen/Handlee) by Joe Prince (SIL Open Font License 1.1) traced into pen strokes (`Maple/hand.json`), so they are real ink; answer bubbles use the system font. See `Maple/Hand-LICENSE.txt`. Greek letters and a few signs are written in Hershey Greek (`Maple/greek.jhf`). The Hershey Fonts were originally created by Dr. A. V. Hershey at the U.S. National Bureau of Standards; see `Maple/Hershey-LICENSE.txt`.
+Maple writes its answers and drawing labels in Maple Hand: [Kalam](https://fonts.google.com/specimen/Kalam) by the Indian Type Foundry (SIL Open Font License 1.1) traced into pen strokes (`Maple/hand.json`), so they are real ink; answer bubbles use the system font. See `Maple/Hand-LICENSE.txt`. Greek letters and a few signs are written in Hershey Greek (`Maple/greek.jhf`). The Hershey Fonts were originally created by Dr. A. V. Hershey at the U.S. National Bureau of Standards; see `Maple/Hershey-LICENSE.txt`.

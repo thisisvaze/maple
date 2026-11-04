@@ -1,7 +1,7 @@
-// Traces Handlee's glyphs into pen strokes for Maple Hand (Maple/hand.json): render each glyph large, thin it to its
+// Traces Kalam's glyphs into pen strokes for Maple Hand (Maple/hand.json): render each glyph large, thin it to its
 // centreline (Zhang–Suen), follow the centreline into polylines, prune spurs, smooth, simplify, and write them in Hershey
 // units (capitals from y -12 to the baseline at 9).
-//   swiftc -O tools/trace-hand.swift -o /tmp/trace-hand && /tmp/trace-hand Maple/Handlee-Regular.ttf Maple/hand.json
+//   swiftc -O tools/trace-hand.swift -o /tmp/trace-hand && /tmp/trace-hand Maple/Kalam-Regular.ttf Maple/hand.json
 import CoreGraphics
 import CoreText
 import Foundation
@@ -10,11 +10,13 @@ let args = CommandLine.arguments
 let data = try Data(contentsOf: URL(fileURLWithPath: args[1])) as CFData
 let cgFont = CGFont(CGDataProvider(data: data)!)!
 let font = CTFontCreateWithGraphicsFont(cgFont, 1000, nil, nil)
-// Handlee's own cap-height metric is short of its capitals, so measure an H.
-let cap: CGFloat = {
+// The font's own metrics can miss its capitals (Kalam's stand a little above its baseline), so measure an H: its foot is
+// the baseline and its top the cap height.
+let (foot, cap): (CGFloat, CGFloat) = {
     var h = UniChar(72), g = CGGlyph()
     CTFontGetGlyphsForCharacters(font, &h, &g, 1)
-    return CTFontCreatePathForGlyph(font, g, nil)!.boundingBoxOfPath.maxY
+    let box = CTFontCreatePathForGlyph(font, g, nil)!.boundingBoxOfPath
+    return (box.minY, box.maxY - box.minY)
 }()
 let k = 21 / cap  // font units to Hershey units
 let px: CGFloat = 320 / cap  // font units to raster pixels: capitals 320 px tall
@@ -150,7 +152,7 @@ for code in 32...126 {
         let stroke = CGFloat(ink) / CGFloat(max(skeleton, 1))  // stroke width in pixels, roughly
         func unit(_ p: P) -> CGPoint {  // pixel → Hershey units
             let fx = CGFloat(p.x) / px + ox, fy = CGFloat(h - 1 - p.y) / px + oy
-            return CGPoint(x: fx * k, y: 9 - fy * k)
+            return CGPoint(x: fx * k, y: 9 - (fy - foot) * k)
         }
         let traced = trace(grid)
         var paths = traced.map { $0.map(unit) }
@@ -161,8 +163,8 @@ for code in 32...126 {
         let attached = traced.map { path in [path.first!, path.last!].contains { end in ends.filter { $0 == end }.count > 1 } }
         paths = paths.indices.filter { length(paths[$0]) > spur || !attached[$0] }.map { paths[$0] }
         // Thinning eats half the stroke at each free end; give it back. A glyph that's only dots has almost no centreline, so
-        // its estimate runs away: cap it at Handlee's usual stroke, 1.9 units.
-        let half = min(stroke / 2 / px * k, 0.95)
+        // its estimate runs away: cap it at Kalam's usual stroke, 2.4 units.
+        let half = min(stroke / 2 / px * k, 1.2)
         lines = paths.map { path -> [[Double]] in
             var pts = simplify(smooth(path), 0.06)
             if pts.count >= 2 {
@@ -210,7 +212,7 @@ for code in 32...126 {
     }
     glyphs[String(UnicodeScalar(UInt8(code)))] = ["right": Double((advance.width * k * 100).rounded() / 100), "lines": lines]
 }
-let out: [String: Any] = ["name": "Maple Hand", "source": "Traced from Handlee by Joe Prince (SIL Open Font License 1.1); see Hand-LICENSE.txt",
+let out: [String: Any] = ["name": "Maple Hand", "source": "Traced from Kalam by the Indian Type Foundry (SIL Open Font License 1.1); see Hand-LICENSE.txt",
                           "glyphs": glyphs]
 try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]).write(to: URL(fileURLWithPath: args[2]))
 let sorted = widths.sorted()

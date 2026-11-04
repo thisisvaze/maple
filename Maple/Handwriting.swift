@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// An answer written as ink in pen faces: Maple Hand (Handlee traced into strokes) for Latin, Hershey Greek, and maths
+/// An answer written as ink in pen faces: Maple Hand (Kalam traced into strokes) for Latin, Hershey Greek, and maths
 /// signs drawn the same way, with powers raised and subscripts lowered, word-wrapped to a width. It is written exactly
 /// as given or not at all: `writable` is nil when any character has no glyph, and the app keeps its quiet dot. Sizes are
 /// page points; `cap` is the capital height.

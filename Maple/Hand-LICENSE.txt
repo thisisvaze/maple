@@ -1,10 +1,8 @@
-hand.json (Maple Hand) is Handlee traced into pen strokes, so Maple can write its answers and labels as real ink. It is a
-modified version of Handlee, so under Handlee's Reserved Font Name it is not called Handlee. Handlee-Regular.ttf is
-Handlee itself, unmodified, for the text in answer bubbles. Both are under the SIL Open Font License 1.1, below.
-From https://github.com/google/fonts/tree/main/ofl/handlee
+hand.json (Maple Hand) is Kalam traced into pen strokes, so Maple can write its answers and labels as real ink. It is a
+modified version of Kalam. Kalam-Regular.ttf is Kalam itself, unmodified. Both are under the SIL Open Font License 1.1,
+below. From https://github.com/google/fonts/tree/main/ofl/kalam
 
-Copyright (c) 2011, Joe Prince, Vissol Ltd. (http://www.vissol.co.uk/mavenpro/)
-with Reserved Font Name "Handlee".
+Copyright (c) 2014, Indian Type Foundry (info@indiantypefoundry.com).
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

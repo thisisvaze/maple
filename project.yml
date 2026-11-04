@@ -25,7 +25,7 @@ targets:
         NSContactsUsageDescription: Maple looks up people you ask about, like a phone number or a birthday. What it reads goes to Meta with your question.
         NSPhotoLibraryUsageDescription: Maple looks at photos you ask about, like a whiteboard or a receipt. The photos it looks at go to Meta with your question.
         UILaunchScreen: {}
-        UIAppFonts: [Handlee-Regular.ttf]
+        UIAppFonts: [Kalam-Regular.ttf]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations~ipad:
