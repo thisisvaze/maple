@@ -156,8 +156,9 @@ for code in 32...126 {
         }
         let traced = trace(grid)
         var paths = traced.map { $0.map(unit) }
-        // Spurs: short branches off a junction, left by thinning round ends and corners.
-        let spur = stroke * 1.2 / px * k
+        // Spurs: short branches off a junction, left by thinning round ends and corners. Under 1.2 strokes long it also
+        // took the foot of Kalam's n, m and h stems, below where the arch leaves them; 0.9 keeps those and still drops spurs.
+        let spur = stroke * 0.9 / px * k
         // Only a branch off a junction is a spur: a short stroke standing on its own (a tick, a dot) is ink.
         let ends = traced.flatMap { [$0.first!, $0.last!] }
         let attached = traced.map { path in [path.first!, path.last!].contains { end in ends.filter { $0 == end }.count > 1 } }
