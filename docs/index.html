@@ -140,8 +140,8 @@
         <span class="cta soon" role="link" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Download for iPad<small>Coming soon</small></span>
       </div>
       <figure class="shot">
-        <a class="film" href="https://youtu.be/RCev1zyMf9k" aria-label="Play Maple in 72 seconds, on YouTube">
-          <img src="maple-showcase-poster.webp" width="1920" height="1080" alt="">
+        <a class="film" href="https://youtu.be/cuc9k0qtfGQ" aria-label="Play the Maple film, on YouTube">
+          <img src="maple-film-poster.webp" width="1920" height="1080" alt="">
           <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>
         </a>
       </figure>
@@ -356,8 +356,8 @@
       if (location.protocol === 'file:') return;  // YouTube refuses embeds without a referrer (error 153): open it there instead
       e.preventDefault();
       const frame = Object.assign(document.createElement('iframe'), {
-        src: 'https://www.youtube-nocookie.com/embed/RCev1zyMf9k?autoplay=1&rel=0&playsinline=1&iv_load_policy=3&color=white',
-        title: 'Maple in 72 seconds', referrerPolicy: 'strict-origin-when-cross-origin', allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowFullscreen: true,
+        src: 'https://www.youtube-nocookie.com/embed/cuc9k0qtfGQ?autoplay=1&rel=0&playsinline=1&iv_load_policy=3&color=white',
+        title: 'Maple, for the Meta AI Global Hackathon', referrerPolicy: 'strict-origin-when-cross-origin', allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowFullscreen: true,
       });
       e.currentTarget.replaceWith(Object.assign(document.createElement('div'), {className: 'film'}));
       document.querySelector('.shot .film').append(frame);
