@@ -69,10 +69,13 @@ final class History: UndoManager {
         var empty: Bool { positions.isEmpty && notePositions.isEmpty }
 
         init(_ state: State, comparedTo other: State) {
+            // PKDrawing.strokes builds a new array on every read: read it once, or indexing it in a loop costs n² (883 ms a
+            // stroke on a 3,000-stroke page, 5 Nov).
+            let strokes = state.drawing.strokes
             let byID = Dictionary(grouping: other.drawing.strokes, by: Marks.id)
             let notes = Dictionary(uniqueKeysWithValues: other.notes.map { ($0.id, $0) })
             // Pixel erasure splits one logical stroke into pieces with the same ID; undo replaces the whole group.
-            let changed = Set(Dictionary(grouping: state.drawing.strokes, by: Marks.id).compactMap { id, pieces -> String? in
+            let changed = Set(Dictionary(grouping: strokes, by: Marks.id).compactMap { id, pieces -> String? in
                 guard let old = byID[id], old.count == pieces.count else { return id }
                 let different = zip(pieces, old).contains { s, old in
                     // PencilKit copies stroke wrappers but shares unchanged paths.
@@ -83,21 +86,22 @@ final class History: UndoManager {
                 }
                 return different ? id : nil
             })
-            positions = state.drawing.strokes.indices.filter { changed.contains(Marks.id(state.drawing.strokes[$0])) }
+            positions = strokes.indices.filter { changed.contains(Marks.id(strokes[$0])) }
             notePositions = state.notes.indices.filter { notes[state.notes[$0].id] != state.notes[$0] }
             var kept = 0
-            let offsets = state.drawing.strokes.map { stroke in
+            let offsets = strokes.map { stroke in
                 defer { if !AgentPen.edit(stroke) { kept += 1 } }
                 return kept
             }
             filePositions = positions.map { offsets[$0] }
-            self.state = State(drawing: PKDrawing(strokes: positions.map { state.drawing.strokes[$0] }), notes: notePositions.map { state.notes[$0] })
+            self.state = State(drawing: PKDrawing(strokes: positions.map { strokes[$0] }), notes: notePositions.map { state.notes[$0] })
         }
 
         var forSaving: Self {
             var patch = self
-            let kept = state.drawing.strokes.indices.filter { !AgentPen.edit(state.drawing.strokes[$0]) }
-            patch.state.drawing = PKDrawing(strokes: kept.map { state.drawing.strokes[$0] })
+            let strokes = state.drawing.strokes
+            let kept = strokes.indices.filter { !AgentPen.edit(strokes[$0]) }
+            patch.state.drawing = PKDrawing(strokes: kept.map { strokes[$0] })
             patch.positions = kept.map { filePositions[$0] }
             patch.filePositions = patch.positions
             return patch
