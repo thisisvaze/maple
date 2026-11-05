@@ -63,6 +63,21 @@ extension DeviceChecks {
         #expect(SettingsPanel.Appearance.dark.colorScheme == .dark)
     }
 
+    /// Every choice reaches the app's window, not just the first two: on iOS 27.2 an App's @AppStorage dropped later ones.
+    @Test func appearanceFollowsEveryChoice() async throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = try #require(scene.windows.first { !($0 is Turner) })
+        let system = scene.screen.traitCollection.userInterfaceStyle, previous = UserDefaults.standard.string(forKey: "appearance")
+        defer { UserDefaults.standard.set(previous, forKey: "appearance") }
+        for choice in [SettingsPanel.Appearance.dark, .system, .light, .dark, .light, .system, .dark, .system] {
+            UserDefaults.standard.set(choice.rawValue, forKey: "appearance")
+            try await Task.sleep(for: .milliseconds(300))
+            let shown = window.rootViewController?.view.traitCollection.userInterfaceStyle
+            let expected: UIUserInterfaceStyle = switch choice { case .system: system; case .light: .light; case .dark: .dark }
+            #expect(shown == expected, "\(choice.rawValue) reaches the window")
+        }
+    }
+
     @Test func appearanceReachesInkWindow() throws {
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let folder = URL.temporaryDirectory.appending(path: "maple-appearance-check-\(UUID().uuidString)")

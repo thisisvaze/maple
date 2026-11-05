@@ -2,11 +2,16 @@ import SwiftUI
 
 @main
 struct MapleApp: App {
-    @AppStorage("appearance") private var appearance = SettingsPanel.Appearance.system
-
     var body: some Scene {
-        WindowGroup { Gallery().preferredColorScheme(appearance.colorScheme) }
+        WindowGroup { Root() }
     }
+}
+
+/// The appearance is read in a view: on iOS 27.2 an App's own @AppStorage stopped updating its scene after a change or
+/// two, so Dark stayed on through System and Light (5 Nov, simulator).
+private struct Root: View {
+    @AppStorage("appearance") private var appearance = SettingsPanel.Appearance.system
+    var body: some View { Gallery().preferredColorScheme(appearance.colorScheme) }
 }
 
 extension UIColor {
