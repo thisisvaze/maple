@@ -120,10 +120,12 @@ struct Gallery: View {
                 if named { pages = Page.all() }
                 for page in pages where page.unread {
                     guard !Task.isCancelled, Marks.aiEnabled else { return }
+                    let seen = modified(page.contentFile)
                     guard let lines = await page.handwriting() else { continue }
                     guard !Task.isCancelled, Marks.aiEnabled else { return }
                     Memories.shared.change { $0.written(lines, page: page.url.lastPathComponent) }
                     try? Data().write(to: page.readFile)
+                    page.mark(page.readFile, asOf: seen)
                 }
             }
         }
@@ -141,7 +143,7 @@ struct Gallery: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        PageTitle(page: page)
+                        PageTitle(page: page) { pages = Page.all() }  // a name saved as the page closes lands after onDismiss
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { titleFrame = $0 }
                     }
                     // Up to the tool dock centered at the top, 146 pt wide, with a gap.
@@ -238,12 +240,14 @@ struct Card: View {
 struct PageTitle: View {
     static let every: Duration = .seconds(8)  // calibration knob: how often to look for new ink to name, one Muse call each time
     let page: Page
+    let renamed: () -> Void
     @State var draft: String
     @State var start: String  // the name when editing began, so Maple renaming meanwhile isn't taken for the person's
     @FocusState var editing: Bool
 
-    init(page: Page) {
+    init(page: Page, renamed: @escaping () -> Void) {
         self.page = page
+        self.renamed = renamed
         let name = page.savedName ?? ""
         _draft = State(initialValue: name)
         _start = State(initialValue: name)
@@ -282,7 +286,7 @@ struct PageTitle: View {
     }
 
     func commit() {
-        if draft != start { page.rename(draft) }
+        if draft != start { page.rename(draft); renamed() }
         draft = page.savedName ?? ""
         start = draft
     }

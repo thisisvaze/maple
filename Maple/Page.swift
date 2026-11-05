@@ -88,6 +88,7 @@ nonisolated struct Page: Identifiable, Hashable {
     @concurrent func nameFromInk() async -> Bool {
         guard Marks.aiEnabled, !Task.isCancelled else { return false }
         guard let muse = Muse.bundled else { return false }
+        let seen = modified(contentFile)
         let archive = try? loadArchive()
         guard let drawing = try? archive?.current.drawing ?? load() else { return false }
         guard !drawing.strokes.isEmpty else { return (try? FileManager.default.removeItem(at: autoNameFile)) != nil }
@@ -102,7 +103,13 @@ nonisolated struct Page: Identifiable, Hashable {
         guard let name = try? await Agent(muse: muse).name(page: png, readings: readings, current: current) else { return false }
         guard Marks.aiEnabled, !Task.isCancelled else { return false }
         try? name.write(to: autoNameFile, atomically: true, encoding: .utf8)  // fails, rightly, if the page was deleted meanwhile
+        mark(autoNameFile, asOf: seen)
         return name != current
+    }
+
+    /// Dates a marker to the ink Maple read, not to when it finished: ink saved during the seconds Muse took still counts as new.
+    func mark(_ file: URL, asOf seen: Date) {
+        try? FileManager.default.setAttributes([.modificationDate: seen], ofItemAtPath: file.path)
     }
 
     /// What the person wrote on the Me page, one line each, read from their ink alone. Nil if it couldn't be read.
